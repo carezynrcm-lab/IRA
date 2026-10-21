@@ -76,7 +76,7 @@ const server = http.createServer(async (req, res) => {
   }
 });
 
-server.listen(PORT, () => console.log(`CareSlot running at http://localhost:${PORT}`));
+server.listen(PORT, () => console.log(`IRA running at http://localhost:${PORT}`));
 
 async function shutdown() {
   server.close();

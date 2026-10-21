@@ -3,10 +3,10 @@
     uv run python tests/e2e.py [MCP_URL]        # default http://127.0.0.1:8765/mcp
 
 1. Calls the MCP endpoint without a token and follows the 401 to the OAuth metadata.
-2. Registers a client, logs in on CareSlot's authorize page (as a hospital, then a patient),
+2. Registers a client, logs in on IRA's authorize page (as a hospital, then a patient),
    exchanges the code with PKCE, and connects with the bearer token.
 3. Checks each role sees only its own tools, and runs real operations.
-Needs the CareSlot site running with the demo accounts.
+Needs the IRA site running with the demo accounts.
 """
 
 import asyncio
@@ -47,10 +47,10 @@ async def oauth_login(http: httpx.AsyncClient, asm: dict, role: str, email: str,
     verifier = secrets.token_urlsafe(48)
     challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).rstrip(b"=").decode()
     params = {"response_type": "code", "client_id": reg["client_id"], "redirect_uri": REDIRECT,
-              "code_challenge": challenge, "code_challenge_method": "S256", "state": "s1", "scope": "careslot",
+              "code_challenge": challenge, "code_challenge_method": "S256", "state": "s1", "scope": "ira",
               "resource": MCP_URL}
     page = await http.get(asm["authorization_endpoint"], params=params)
-    assert page.status_code == 200 and "Log in to CareSlot" in page.text
+    assert page.status_code == 200 and "Log in to IRA" in page.text
     r = await http.post(asm["authorization_endpoint"], data={**params, "role": role, "email": email,
                                                              "password": password, "decision": "allow"})
     assert r.status_code == 302, (r.status_code, r.text[:200])

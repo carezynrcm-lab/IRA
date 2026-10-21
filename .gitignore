@@ -8,3 +8,5 @@ data/
 __pycache__/
 *.py[oc]
 mcp/.venv/
+.vercel
+.env*

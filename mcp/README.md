@@ -1,17 +1,17 @@
-# CareSlot MCP server (Python)
+# IRA MCP server (Python)
 
-Lets Claude operate CareSlot, **logged in as a hospital (doctor) or as a patient**, through the
+Lets Claude operate IRA, **logged in as a hospital (doctor) or as a patient**, through the
 [Model Context Protocol](https://modelcontextprotocol.io). Every tool replies in short,
 speakable sentences, so it suits voice use (speech-to-text → Claude → text-to-speech).
 
-The server is a thin layer over the CareSlot REST API. Booking rules, double-booking
+The server is a thin layer over the IRA REST API. Booking rules, double-booking
 protection, notifications and emails all still run in the main app, so anything done by voice
 shows up instantly on the website, and the reverse.
 
 ## How login works (OAuth)
 
 The server is an OAuth-protected MCP endpoint, and **login comes first**. When you add it as a
-custom connector, Claude gets a `401` that points to CareSlot's login page. There you choose
+custom connector, Claude gets a `401` that points to IRA's login page. There you choose
 **Patient** or **Hospital / Doctor** and log in, and the password never passes through the chat.
 Claude then receives a token for that account, and every MCP request carries it. So the server
 always knows who is calling, even on stateless serverless hosting.
@@ -39,25 +39,25 @@ Demo logins: hospital `city@demo.com` / `hospital123`, patient `patient@demo.com
 ## Run locally
 
 ```bash
-uv run careslot-mcp                 # http://127.0.0.1:8765/mcp, OAuth via CARESLOT_URL (default http://localhost:3000)
+uv run ira-mcp                 # http://127.0.0.1:8765/mcp, OAuth via IRA_URL (default http://localhost:3000)
 uv run python tests/e2e.py          # acts like Claude: 401 → OAuth login → tools, for both roles
 ```
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `CARESLOT_URL` | `http://localhost:3000` | The CareSlot site: REST API and OAuth issuer |
+| `IRA_URL` | `http://localhost:3000` | The IRA site: REST API and OAuth issuer |
 | `MCP_PUBLIC_URL` | `http://localhost:8765/mcp` | Public URL of this endpoint (the OAuth resource) |
-| `CARESLOT_MCP_LOG_LEVEL` | `WARNING` | Server log level |
+| `IRA_MCP_LOG_LEVEL` | `WARNING` | Server log level |
 
 In production it runs as the Vercel Python function `api/mcp.py`, served at `https://<domain>/mcp`.
 
 ## Files
 
 ```
-src/careslot_mcp/
+src/ira_mcp/
   __init__.py   local HTTP server (uvicorn)
   server.py     OAuth token verifier, role gate, tools, serverless ASGI app
-  api.py        async CareSlot API client
+  api.py        async IRA API client
   dates.py      natural-language date & time parsing
 tests/e2e.py    end-to-end OAuth + MCP test
 ```

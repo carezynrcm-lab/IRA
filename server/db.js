@@ -1,7 +1,8 @@
 import postgres from 'postgres';
 
-// Supabase Postgres through the transaction pooler (port 6543). Prepared statements must be
-// off in transaction mode. One small pool per serverless instance is plenty.
+// Supabase Postgres through the Supavisor *session* pooler (port 5432). Transaction mode
+// (6543) intermittently lost query responses with this driver, hanging requests, so we use
+// session mode with a small pool and a short idle timeout to release connections quickly.
 let sql = null;
 
 export function db() {
@@ -11,7 +12,7 @@ export function db() {
   sql = postgres(url, {
     prepare: false,
     max: Number(process.env.DB_POOL_SIZE || 3),
-    idle_timeout: 20,
+    idle_timeout: 10,
     connect_timeout: 10,
     connection: { search_path: 'careslot' },
     // COUNT/SUM come back as int8/numeric strings by default; the app wants plain numbers.

@@ -127,7 +127,7 @@ const handlers = {
   },
 
   async 'hospital.created'(sql, { hospitalId }) {
-    for (const s of await staffOf(sql, hospitalId)) await notify(sql, s.id, 'Welcome to CareSlot! Set your working hours in Settings.');
+    for (const s of await staffOf(sql, hospitalId)) await notify(sql, s.id, 'Welcome to IRA! Set your working hours in Settings.');
     await scheduleStatsRefresh(sql);
   },
 
