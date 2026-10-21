@@ -1,0 +1,19 @@
+{
+  "name": "careslot",
+  "version": "1.0.0",
+  "description": "Hospital appointment booking system (admin / hospital / patient)",
+  "type": "module",
+  "private": true,
+  "engines": {
+    "node": ">=22.13"
+  },
+  "scripts": {
+    "start": "node server/index.js",
+    "dev": "node --watch server/index.js",
+    "reset": "rm -rf data && node server/index.js"
+  },
+  "dependencies": {
+    "@vercel/functions": "^2.2.13",
+    "postgres": "^3.4.9"
+  }
+}

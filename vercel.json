@@ -1,0 +1,22 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "regions": ["bom1"],
+  "functions": {
+    "api/index.js": { "maxDuration": 30 },
+    "api/mcp.py": { "maxDuration": 30, "includeFiles": "mcp/src/**" }
+  },
+  "rewrites": [
+    { "source": "/mcp", "destination": "/api/mcp" },
+    { "source": "/.well-known/oauth-protected-resource", "destination": "/api/mcp?__prm=1" },
+    { "source": "/.well-known/oauth-protected-resource/:path*", "destination": "/api/mcp?__prm=1" },
+    { "source": "/.well-known/oauth-authorization-server", "destination": "/api/index?__route=/.well-known/oauth-authorization-server" },
+    { "source": "/.well-known/oauth-authorization-server/:path*", "destination": "/api/index?__route=/.well-known/oauth-authorization-server" },
+    { "source": "/.well-known/openid-configuration", "destination": "/api/index?__route=/.well-known/openid-configuration" },
+    { "source": "/oauth/:path*", "destination": "/api/index?__route=/oauth/:path*" },
+    { "source": "/api/:path*", "destination": "/api/index?__route=/api/:path*" }
+  ],
+  "headers": [
+    { "source": "/(.*)\\.(js|css)", "headers": [{ "key": "Cache-Control", "value": "public, max-age=0, must-revalidate" }] }
+  ],
+  "crons": [{ "path": "/api/cron", "schedule": "0 3 * * *" }]
+}

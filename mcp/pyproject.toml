@@ -1,0 +1,19 @@
+[project]
+name = "careslot-mcp"
+version = "0.1.0"
+description = "MCP server for CareSlot: lets Claude act as a patient or a hospital"
+authors = [
+    { name = "Khushal Jain", email = "carezyn.rcm@gmail.com" }
+]
+requires-python = ">=3.12"
+dependencies = [
+    "httpx>=0.28.1",
+    "mcp[cli]>=2.3.0",
+]
+
+[project.scripts]
+careslot-mcp = "careslot_mcp:main"
+
+[build-system]
+requires = ["uv_build>=0.12.5,<0.13.0"]
+build-backend = "uv_build"
