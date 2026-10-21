@@ -1,4 +1,4 @@
-"""Async client for the IRA REST API and the per-connection login state."""
+"""Async client for the ERA REST API and the per-connection login state."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ from typing import Any
 import httpx
 
 
-class IRAError(Exception):
+class ERAError(Exception):
     """An error with a message that is safe and useful to show (or say) to the user."""
 
 
@@ -23,7 +23,7 @@ class Account:
         return self.user["role"] if self.user else None
 
 
-class IRAClient:
+class ERAClient:
     def __init__(self, base_url: str) -> None:
         self.base_url = base_url.rstrip("/")
         self._http = httpx.AsyncClient(base_url=f"{self.base_url}/api", timeout=15.0)
@@ -33,19 +33,19 @@ class IRAClient:
         try:
             res = await self._http.request(method, path, json=body, headers=headers)
         except httpx.HTTPError as exc:
-            raise IRAError(
-                f"I can't reach the IRA server at {self.base_url}. Is it running? ({exc.__class__.__name__})"
+            raise ERAError(
+                f"I can't reach the ERA server at {self.base_url}. Is it running? ({exc.__class__.__name__})"
             ) from exc
 
         # Sessions last 30 days. Passwords are never stored, so ask the user to log in again.
         if res.status_code == 401 and account and account.token and not path.startswith("/auth/"):
             account.token = account.user = account.hospital = None
-            raise IRAError("The login session has expired. Please log in again.")
+            raise ERAError("The login session has expired. Please log in again.")
 
         data = None if res.status_code == 204 else _json(res)
         if res.is_error:
             message = data.get("error") if isinstance(data, dict) else None
-            raise IRAError(message or f"IRA returned an error ({res.status_code}).")
+            raise ERAError(message or f"ERA returned an error ({res.status_code}).")
         return data
 
     async def sign_in(self, account: Account, email: str, password: str) -> Account:
@@ -59,7 +59,7 @@ class IRAClient:
         if account.token:
             try:
                 await self.request(account, "POST", "/auth/logout")
-            except IRAError:
+            except ERAError:
                 pass
         account.token = account.user = account.hospital = None
 

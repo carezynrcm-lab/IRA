@@ -1,4 +1,4 @@
-"""IRA MCP server: lets an assistant act as a patient or as a hospital.
+"""ERA MCP server: lets an assistant act as a patient or as a hospital.
 
 Every tool returns short, speakable text so it works well with voice (STT → Claude → TTS).
 """
@@ -23,13 +23,13 @@ from mcp.server.mcpserver.exceptions import ToolError
 from mcp.server.transport_security import TransportSecuritySettings
 from mcp_types import CallToolResult, TextContent, ToolAnnotations
 
-from .api import Account, IRAClient, IRAError
+from .api import Account, ERAClient, ERAError
 from .dates import (WEEKDAYS, fmt_date, fmt_time, in_part_of_day, now_hhmm, on_date, parse_date, parse_time, today)
 
 INSTRUCTIONS = """\
-IRA is a hospital appointment booking system used by PATIENTS and HOSPITALS (doctors).
+ERA is a hospital appointment booking system used by PATIENTS and HOSPITALS (doctors).
 
-The user logged in when they connected this connector (IRA's OAuth login page, where they
+The user logged in when they connected this connector (ERA's OAuth login page, where they
 chose patient or hospital), so you act as that account and see only its tools. Call `whoami` to
 see who that is, plus today's date and time.
 - A patient can find hospitals, check free slots, book, reschedule, cancel and review appointments.
@@ -48,7 +48,7 @@ Working style:
 
 PartOfDay = Literal["any", "morning", "afternoon", "evening"]
 DOW_SHORT = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
-# IRA stores working days as JS weekday numbers (0 = Sunday).
+# ERA stores working days as JS weekday numbers (0 = Sunday).
 JS_TO_PY = {0: 6, 1: 0, 2: 1, 3: 2, 4: 3, 5: 4, 6: 5}
 PY_TO_JS = {v: k for k, v in JS_TO_PY.items()}
 
@@ -69,18 +69,18 @@ ROLE_TOOLS = {
     },
 }
 
-IRA_URL = os.environ.get("IRA_URL", "http://localhost:3000").rstrip("/")
-# Public URL of this MCP endpoint (the OAuth "resource"), e.g. https://ira.vercel.app/mcp.
+ERA_URL = os.environ.get("ERA_URL", "http://localhost:3000").rstrip("/")
+# Public URL of this MCP endpoint (the OAuth "resource"), e.g. https://era.vercel.app/mcp.
 MCP_PUBLIC_URL = os.environ.get("MCP_PUBLIC_URL", "http://localhost:8765/mcp").rstrip("/")
 
-client = IRAClient(IRA_URL)
+client = ERAClient(ERA_URL)
 
 
 # ---------------------------------------------------------------------------
-# OAuth: every request carries an IRA access token (issued by IRA's own login page).
+# OAuth: every request carries an ERA access token (issued by ERA's own login page).
 # ---------------------------------------------------------------------------
-class IRATokenVerifier(TokenVerifier):
-    """Verifies bearer tokens by asking IRA who they belong to (cached briefly)."""
+class ERATokenVerifier(TokenVerifier):
+    """Verifies bearer tokens by asking ERA who they belong to (cached briefly)."""
 
     TTL = 60.0
 
@@ -97,12 +97,12 @@ class IRATokenVerifier(TokenVerifier):
             return hit[1]
         try:
             me = await client.request(Account(token=token), "GET", "/me")
-        except IRAError:
+        except ERAError:
             me = None
         result = None
         if me and me["user"]["role"] in ROLE_TOOLS:
             result = AccessToken(
-                token=token, client_id="ira", scopes=["ira"], resource=MCP_PUBLIC_URL,
+                token=token, client_id="era", scopes=["era"], resource=MCP_PUBLIC_URL,
                 subject=str(me["user"]["id"]), claims={"user": me["user"], "hospital": me.get("hospital")},
             )
         if len(self._cache) > 5000:
@@ -115,7 +115,7 @@ def _token_key(token: str) -> str:
     return hashlib.sha256(token.encode()).hexdigest()
 
 
-verifier = IRATokenVerifier()
+verifier = ERATokenVerifier()
 
 
 def _current_account() -> Account | None:
@@ -138,7 +138,7 @@ class RoleGate(ServerMiddleware[Any]):
             acct = _current_account()
             if name not in _visible_tools(acct):
                 who = _who(acct) if acct else "this connection"
-                msg = (f"“{name}” isn't available to {who}. To use another account, reconnect the IRA "
+                msg = (f"“{name}” isn't available to {who}. To use another account, reconnect the ERA "
                        "connector and log in as that account.")
                 return CallToolResult(content=[TextContent(type="text", text=msg)], is_error=True)
         result = await call_next(ctx)
@@ -152,18 +152,18 @@ class RoleGate(ServerMiddleware[Any]):
 
 
 mcp = MCPServer(
-    name="ira",
-    title="IRA Appointments",
+    name="era",
+    title="ERA Appointments",
     description="Book and manage hospital appointments as a patient or a hospital.",
     instructions=INSTRUCTIONS,
     version="2.0.0",
-    log_level=os.environ.get("IRA_MCP_LOG_LEVEL", "WARNING"),
+    log_level=os.environ.get("ERA_MCP_LOG_LEVEL", "WARNING"),
     token_verifier=verifier,
     auth=AuthSettings(
-        issuer_url=IRA_URL,
+        issuer_url=ERA_URL,
         resource_server_url=MCP_PUBLIC_URL,
-        required_scopes=["ira"],
-        validate_token_resource=False,  # tokens are IRA sessions; the verifier checks them itself
+        required_scopes=["era"],
+        validate_token_resource=False,  # tokens are ERA sessions; the verifier checks them itself
     ),
     middleware=[RoleGate()],
 )
@@ -173,7 +173,7 @@ logging.getLogger("httpx").setLevel(logging.WARNING)
 async def _account(ctx: Context, role: str | None = None) -> Account:
     acct = _current_account()
     if not acct:
-        raise ToolError("You're not logged in. Reconnect the IRA connector to log in.")
+        raise ToolError("You're not logged in. Reconnect the ERA connector to log in.")
     if role and acct.role != role:
         raise ToolError(f"That is a {role} action, but you're logged in as {_who(acct)}.")
     return acct
@@ -193,7 +193,7 @@ def friendly_errors():
         yield
     except ToolError:
         raise
-    except (IRAError, ValueError) as exc:
+    except (ERAError, ValueError) as exc:
         raise ToolError(str(exc)) from exc
 
 
@@ -360,7 +360,7 @@ def _parse_days(value: str | list[str]) -> list[int]:
 # ---------------------------------------------------------------------------
 @mcp.tool(title="Who am I", annotations=READ)
 async def whoami(ctx: Context) -> str:
-    """Show which IRA account you're acting as, plus today's date and the current time."""
+    """Show which ERA account you're acting as, plus today's date and the current time."""
     acct = await _account(ctx)
     t = today()
     clock = f"Today is {t.strftime('%A')}, {t.day} {t.strftime('%B %Y')}, and the time is {fmt_time(now_hhmm())}."
@@ -495,7 +495,7 @@ async def book_appointment(hospital: str, date: str, time: str, ctx: Context, re
         try:
             a = await client.request(acct, "POST", "/appointments",
                                      {"hospitalId": h["id"], "date": d.isoformat(), "time": t, "reason": reason})
-        except IRAError as exc:
+        except ERAError as exc:
             # Offer nearby alternatives so the conversation can continue smoothly.
             hint = ""
             if _is_open_on(h, d) and d >= today():
@@ -747,10 +747,10 @@ async def update_working_hours(
 # ---------------------------------------------------------------------------
 # Prompts: one-click starting points in Claude
 # ---------------------------------------------------------------------------
-@mcp.prompt(title="Start with IRA")
-def start_ira() -> str:
-    """Begin an IRA session as the connected account."""
-    return ("Check who I'm logged in as in IRA, then in one or two short sentences tell me what's coming "
+@mcp.prompt(title="Start with ERA")
+def start_era() -> str:
+    """Begin an ERA session as the connected account."""
+    return ("Check who I'm logged in as in ERA, then in one or two short sentences tell me what's coming "
             "up for me today and what you can help with.")
 
 

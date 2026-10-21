@@ -1,4 +1,4 @@
-// IRA client: a dependency-free single-page app.
+// ERA client: a dependency-free single-page app.
 //
 // Speed comes from two ideas:
 //  1. Stale-while-revalidate cache: every view renders instantly from cached data
@@ -158,11 +158,11 @@ function downloadIcs(a) {
   const end = new Date(start.getTime() + (a.slot_minutes || 30) * 60000);
   const icsText = (s) => String(s || '').replace(/[,;\\]/g, (c) => `\\${c}`).replace(/\n/g, '\\n');
   const ics = [
-    'BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//IRA//EN', 'BEGIN:VEVENT',
-    `UID:ira-${a.id}@ira`, `DTSTAMP:${new Date().toISOString().replace(/[-:]/g, '').slice(0, 15)}Z`,
+    'BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//ERA//EN', 'BEGIN:VEVENT',
+    `UID:era-${a.id}@era`, `DTSTAMP:${new Date().toISOString().replace(/[-:]/g, '').slice(0, 15)}Z`,
     `DTSTART:${stamp(a.date, a.time)}`, `DTEND:${stamp(ymd(end), `${pad(end.getHours())}:${pad(end.getMinutes())}`)}`,
     `SUMMARY:${icsText(`Appointment · ${a.hospital_name}`)}`, `LOCATION:${icsText(a.hospital_address || a.hospital_city)}`,
-    `DESCRIPTION:${icsText(a.reason ? `Reason: ${a.reason}` : 'Booked with IRA')}`,
+    `DESCRIPTION:${icsText(a.reason ? `Reason: ${a.reason}` : 'Booked with ERA')}`,
     'BEGIN:VALARM', 'TRIGGER:-PT1H', 'ACTION:DISPLAY', 'DESCRIPTION:Appointment reminder', 'END:VALARM',
     'END:VEVENT', 'END:VCALENDAR',
   ].join('\r\n');
@@ -177,8 +177,8 @@ const reduceMotion = () => matchMedia('(prefers-reduced-motion: reduce)').matche
 const $app = document.getElementById('app');
 const $modal = document.getElementById('modal-root');
 const $toasts = document.getElementById('toasts');
-const SESSION_KEY = 'ira.session';
-const THEME_KEY = 'ira.theme';
+const SESSION_KEY = 'era.session';
+const THEME_KEY = 'era.theme';
 const STALE_MS = 5000;
 
 const state = {
@@ -524,7 +524,7 @@ function layout(r, page, entering) {
   return html`
     <header class="topbar">
       <div class="wrap topbar-in">
-        <a class="brand" href="#${HOME[u.role]}">${LOGO} IRA</a>
+        <a class="brand" href="#${HOME[u.role]}">${LOGO} ERA</a>
         <nav class="nav">${links}</nav>
         <div class="top-right" id="top-actions">${topActions()}</div>
       </div>
@@ -582,7 +582,7 @@ function authShell(card) {
     <div class="auth">
       <div class="auth-art">
         <span class="blob b1"></span><span class="blob b2"></span>
-        <div class="brand">${LOGO_LIGHT} IRA</div>
+        <div class="brand">${LOGO_LIGHT} ERA</div>
         <div>
           <h2>Healthcare appointments, without the waiting.</h2>
           <p>Find a hospital, pick a time that suits you, and you're booked in seconds.</p>
@@ -592,12 +592,12 @@ function authShell(card) {
             <div class="feature">${icon('shield')} One platform for admins, hospitals and patients</div>
           </div>
         </div>
-        <small style="color:#fff;opacity:.7">© ${new Date().getFullYear()} IRA</small>
+        <small style="color:#fff;opacity:.7">© ${new Date().getFullYear()} ERA</small>
       </div>
       <div class="auth-side">
         <div class="theme-corner">${themeBtn()}</div>
         <div class="auth-card">
-          <div class="brand mobile-brand">${LOGO} IRA</div>
+          <div class="brand mobile-brand">${LOGO} ERA</div>
           ${card}
         </div>
       </div>
