@@ -2,6 +2,7 @@
 //   node scripts/migrate-sqlite.js [path/to/app.db]
 // Keeps ids and password hashes, so existing accounts keep working. Sessions are not copied
 // (everyone signs in again), and stats are recomputed by the app.
+import '../server/tz.js';
 import { DatabaseSync } from 'node:sqlite';
 import path from 'node:path';
 

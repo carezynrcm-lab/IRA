@@ -1,3 +1,4 @@
 # Python dependencies for the MCP function (api/mcp.py). The MCP package lives in mcp/src.
 mcp==2.3.0
 httpx>=0.28.1
+tzdata>=2024.1

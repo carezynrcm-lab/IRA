@@ -70,6 +70,7 @@ environment variables:
 | `IRA_URL` | same as `PUBLIC_URL` (used by the MCP function) |
 | `MCP_PUBLIC_URL` | `https://<your-vercel-domain>/mcp` |
 | `CRON_SECRET` | any random string (protects `/api/cron`) |
+| `APP_TIMEZONE` | optional, default `Asia/Kolkata` (servers run in UTC; slots are local time) |
 
 ## Project layout
 

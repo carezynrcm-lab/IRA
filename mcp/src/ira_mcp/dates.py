@@ -2,8 +2,13 @@
 
 from __future__ import annotations
 
+import os
 import re
 from datetime import date, datetime, timedelta
+from zoneinfo import ZoneInfo
+
+# Hospitals work in local time; serverless machines run in UTC.
+TZ = ZoneInfo(os.environ.get("APP_TIMEZONE", "Asia/Kolkata"))
 
 WEEKDAYS = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
 MONTHS = ["january", "february", "march", "april", "may", "june", "july", "august",
@@ -16,7 +21,7 @@ PARTS_OF_DAY = {
 
 
 def today() -> date:
-    return date.today()
+    return datetime.now(TZ).date()
 
 
 def _weekday_index(word: str) -> int | None:
@@ -161,4 +166,4 @@ def on_date(d: date | str, base: date | None = None) -> str:
 
 
 def now_hhmm() -> str:
-    return datetime.now().strftime("%H:%M")
+    return datetime.now(TZ).strftime("%H:%M")
