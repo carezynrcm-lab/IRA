@@ -581,12 +581,6 @@ td .tags { max-width: 400px; }
 .auth-card .sub { color: var(--muted); margin: 0 0 24px; }
 .auth-card .mobile-brand { display: none; margin-bottom: 22px; }
 .auth-card .switch { text-align: center; margin-top: 18px; font-size: 14px; color: var(--muted); }
-.demo { margin-top: 26px; }
-.demo p { display: flex; align-items: center; gap: 10px; margin: 0 0 10px; font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; font-weight: 650; }
-.demo p::before, .demo p::after { content: ""; flex: 1; height: 1px; background: var(--border); }
-.demo-btns { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
-.demo-btns .btn { flex-direction: column; gap: 4px; padding: 11px 6px; }
-.demo-btns .btn svg.i { width: 18px; height: 18px; color: var(--primary); }
 .form-error { background: var(--danger-soft); color: var(--danger); padding: 10px 12px; border-radius: 10px; font-size: 14px; margin-bottom: 14px; animation: shake .4s; }
 @media (max-width: 860px) {
   .auth { grid-template-columns: 1fr; }

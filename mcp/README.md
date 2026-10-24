@@ -41,8 +41,6 @@ Dates and times can be spoken naturally: `today`, `tomorrow`, `day after tomorro
 (read as 3:30 PM), `14:00`, `noon`. Hospitals can be named loosely ("City General", "lotus").
 Cancel is marked destructive, so Claude asks for confirmation first.
 
-Demo logins: hospital `city@demo.com` / `hospital123`, patient `patient@demo.com` / `patient123`.
-
 ## Run locally
 
 ```bash

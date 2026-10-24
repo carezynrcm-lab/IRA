@@ -46,9 +46,6 @@ Claude then gets only that role's tools. When a hospital asks for a day's appoin
 first lists the doctors and asks whose schedule to show. To switch roles, disconnect and reconnect
 (or add a second connector). See [`mcp/README.md`](mcp/README.md) for the full tool list.
 
-Demo logins: admin `admin@demo.com` / `admin123`, hospital `city@demo.com` / `hospital123`,
-patient `patient@demo.com` / `patient123`.
-
 ## Run locally
 
 Requires Node 22.13+, and [uv](https://docs.astral.sh/uv/) for the MCP server.

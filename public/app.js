@@ -627,15 +627,7 @@ function loginView() {
       <label><span>Password</span><input id="l-pw" name="password" type="password" autocomplete="current-password" placeholder="••••••••" required></label>
       <button class="btn grad block">Sign in ${icon('arrow-right')}</button>
     </form>
-    <div class="switch">New patient? <a href="#/register">Create an account</a></div>
-    <div class="demo">
-      <p>Try a demo account</p>
-      <div class="demo-btns">
-        <button class="btn ghost sm" data-action="demo" data-email="patient@demo.com" data-pw="patient123">${icon('user')}Patient</button>
-        <button class="btn ghost sm" data-action="demo" data-email="city@demo.com" data-pw="hospital123">${icon('hospital')}Hospital</button>
-        <button class="btn ghost sm" data-action="demo" data-email="admin@demo.com" data-pw="admin123">${icon('grid')}Admin</button>
-      </div>
-    </div>`);
+    <div class="switch">New patient? <a href="#/register">Create an account</a></div>`);
 }
 
 function registerView() {
@@ -1522,13 +1514,6 @@ const actions = {
     clearSession();
     $toasts.innerHTML = '';
     go('/login');
-  },
-
-  demo({ email, pw }, el) {
-    const form = el.closest('.auth-card').querySelector('form');
-    form.email.value = email;
-    form.password.value = pw;
-    form.requestSubmit();
   },
 
   'toggle-notif'() {
