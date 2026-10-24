@@ -35,3 +35,6 @@ export function slotTimes(hospital) {
   }
   return out;
 }
+
+// A doctor works on a date when it's one of their weekly days and not a listed day off.
+export const doctorWorksOn = (doctor, date) => isOpenOn(doctor, date) && !(doctor.time_off || []).includes(date);

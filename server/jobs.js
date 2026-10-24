@@ -80,22 +80,26 @@ async function scheduleStatsRefresh(sql) {
 
 async function loadAppointment(sql, id) {
   const [a] = await sql`
-    select a.*, h.name as hospital_name, u.name as patient_name, u.email as patient_email
+    select a.*, h.name as hospital_name, u.name as patient_name, u.email as patient_email, d.name as doctor_name
     from appointments a
     join hospitals h on h.id = a.hospital_id
     join users u on u.id = a.patient_id
+    join doctors d on d.id = a.doctor_id
     where a.id = ${id}`;
   return a;
 }
+
+// "Dr. Anjali Desai at City General Hospital"
+const withDoctor = (a) => `${a.doctor_name} at ${a.hospital_name}`;
 
 const handlers = {
   async 'appointment.booked'(sql, { id }) {
     const a = await loadAppointment(sql, id);
     if (!a) return;
     const when = fmtWhen(a);
-    await notify(sql, a.patient_id, `Confirmed: ${a.hospital_name} on ${when}.`);
-    for (const s of await staffOf(sql, a.hospital_id)) await notify(sql, s.id, `New booking: ${a.patient_name} on ${when}.`);
-    await sendEmail(sql, a.patient_email, 'Appointment confirmed', `Your appointment at ${a.hospital_name} on ${when} is confirmed.`);
+    await notify(sql, a.patient_id, `Confirmed: ${withDoctor(a)} on ${when}.`);
+    for (const s of await staffOf(sql, a.hospital_id)) await notify(sql, s.id, `New booking for ${a.doctor_name}: ${a.patient_name} on ${when}.`);
+    await sendEmail(sql, a.patient_email, 'Appointment confirmed', `Your appointment with ${withDoctor(a)} on ${when} is confirmed.`);
     await scheduleStatsRefresh(sql);
   },
 
@@ -104,12 +108,12 @@ const handlers = {
     if (!a) return;
     const when = fmtWhen(a);
     if (byRole === 'patient') {
-      for (const s of await staffOf(sql, a.hospital_id)) await notify(sql, s.id, `${a.patient_name} cancelled their ${when} appointment.`);
+      for (const s of await staffOf(sql, a.hospital_id)) await notify(sql, s.id, `${a.patient_name} cancelled their ${when} appointment with ${a.doctor_name}.`);
     } else {
       const verb = status === 'completed' ? 'marked as completed' : 'cancelled by the hospital';
-      await notify(sql, a.patient_id, `Your ${a.hospital_name} appointment on ${when} was ${verb}.`);
+      await notify(sql, a.patient_id, `Your appointment with ${withDoctor(a)} on ${when} was ${verb}.`);
       if (status === 'cancelled') {
-        await sendEmail(sql, a.patient_email, 'Appointment cancelled', `${a.hospital_name} cancelled your appointment on ${when}.`);
+        await sendEmail(sql, a.patient_email, 'Appointment cancelled', `${a.hospital_name} cancelled your appointment with ${a.doctor_name} on ${when}.`);
       }
     }
     await scheduleStatsRefresh(sql);
@@ -120,14 +124,14 @@ const handlers = {
     if (!a) return;
     const was = fmtWhen(from);
     const when = fmtWhen(a);
-    await notify(sql, a.patient_id, `Rescheduled: ${a.hospital_name} moved to ${when}.`);
-    for (const s of await staffOf(sql, a.hospital_id)) await notify(sql, s.id, `${a.patient_name} moved their appointment from ${was} to ${when}.`);
-    await sendEmail(sql, a.patient_email, 'Appointment rescheduled', `Your appointment at ${a.hospital_name} is now on ${when} (was ${was}).`);
+    await notify(sql, a.patient_id, `Rescheduled: ${withDoctor(a)} moved to ${when}.`);
+    for (const s of await staffOf(sql, a.hospital_id)) await notify(sql, s.id, `${a.patient_name} moved their appointment with ${a.doctor_name} from ${was} to ${when}.`);
+    await sendEmail(sql, a.patient_email, 'Appointment rescheduled', `Your appointment with ${withDoctor(a)} is now on ${when} (was ${was}).`);
     await scheduleStatsRefresh(sql);
   },
 
   async 'hospital.created'(sql, { hospitalId }) {
-    for (const s of await staffOf(sql, hospitalId)) await notify(sql, s.id, 'Welcome to ERA! Set your working hours in Settings.');
+    for (const s of await staffOf(sql, hospitalId)) await notify(sql, s.id, 'Welcome to IRA! Add your doctors and their timings under Doctors.');
     await scheduleStatsRefresh(sql);
   },
 

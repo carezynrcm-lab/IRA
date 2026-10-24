@@ -3,10 +3,10 @@
     uv run python tests/e2e.py [MCP_URL]        # default http://127.0.0.1:8765/mcp
 
 1. Calls the MCP endpoint without a token and follows the 401 to the OAuth metadata.
-2. Registers a client, logs in on ERA's authorize page (as a hospital, then a patient),
+2. Registers a client, logs in on IRA's authorize page (as a hospital, then a patient),
    exchanges the code with PKCE, and connects with the bearer token.
 3. Checks each role sees only its own tools, and runs real operations.
-Needs the ERA site running with the demo accounts.
+Needs the IRA site running with the demo accounts.
 """
 
 import asyncio
@@ -24,6 +24,7 @@ from mcp.client.streamable_http import create_mcp_http_client, streamable_http_c
 MCP_URL = sys.argv[1] if len(sys.argv) > 1 else "http://127.0.0.1:8765/mcp"
 REDIRECT = "https://claude.ai/api/mcp/auth_callback"
 created: list[int] = []
+created_doctors: list[str] = []
 
 
 async def discover(http: httpx.AsyncClient) -> dict:
@@ -47,10 +48,10 @@ async def oauth_login(http: httpx.AsyncClient, asm: dict, role: str, email: str,
     verifier = secrets.token_urlsafe(48)
     challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).rstrip(b"=").decode()
     params = {"response_type": "code", "client_id": reg["client_id"], "redirect_uri": REDIRECT,
-              "code_challenge": challenge, "code_challenge_method": "S256", "state": "s1", "scope": "era",
+              "code_challenge": challenge, "code_challenge_method": "S256", "state": "s1", "scope": "ira",
               "resource": MCP_URL}
     page = await http.get(asm["authorization_endpoint"], params=params)
-    assert page.status_code == 200 and "Log in to ERA" in page.text
+    assert page.status_code == 200 and "Log in to IRA" in page.text
     r = await http.post(asm["authorization_endpoint"], data={**params, "role": role, "email": email,
                                                              "password": password, "decision": "allow"})
     assert r.status_code == 302, (r.status_code, r.text[:200])
@@ -79,23 +80,46 @@ async def session(token: str, label: str, script) -> None:
 
 
 async def hospital_script(names, call):
-    assert "get_schedule" in names and "book_appointment" not in names
+    assert {"get_schedule", "my_doctors", "add_doctor", "update_doctor", "remove_doctor"} <= names
+    assert "book_appointment" not in names
     await call("whoami")
     await call("hospital_summary")
-    await call("get_schedule", date="friday")
-    await call("list_patients", search="priya")
-    err, _ = await call("book_appointment", hospital="City General", date="tomorrow", time="10am")
+    await call("my_doctors")
+    # No doctor named + several doctors → the tool lists doctors and asks which one.
+    _, txt = await call("get_schedule", date="friday")
+    assert "Ask the user which doctor" in txt, txt
+    _, txt = await call("get_schedule", date="friday", doctor="the cardiologist")
+    assert "Desai" in txt
+    await call("get_schedule", date="friday", doctor="all")
+    await call("get_appointments", from_date="today", to_date="in 7 days", doctor="Dr. Rao")
+    # Manage a doctor end to end.
+    err, txt = await call("add_doctor", name="Dr. E2E Tester", specialty="Pulmonology", qualification="MBBS, MD",
+                          experience_years=6, consultation_fee=450, working_days="Mon, Wed, Fri",
+                          start_time="10 am", end_time="1 pm", appointment_minutes=20)
+    assert not err, txt
+    created_doctors.append("Dr. E2E Tester")
+    err, txt = await call("update_doctor", doctor="E2E Tester", available=False, add_days_off="next friday")
+    assert not err and "NOT taking" in txt, txt
+    err, txt = await call("remove_doctor", doctor="E2E Tester")
+    assert not err, txt
+    err, _ = await call("book_appointment", hospital="City General", doctor="Desai", date="tomorrow", time="10am")
     assert err
 
 
 async def patient_script(names, call):
-    assert "book_appointment" in names and "get_schedule" not in names
+    assert {"list_doctors", "find_doctors", "book_appointment"} <= names and "get_schedule" not in names
     await call("whoami")
-    await call("find_next_available", hospital="lotus", part_of_day="morning", how_many=3)
-    err, booked = await call("book_appointment", hospital="City General", date="friday", time="2:30 pm", reason="E2E TEST")
+    await call("list_doctors", hospital="City General")
+    await call("find_doctors", search="dermatologist")
+    _, txt = await call("check_availability", hospital="City General", date="friday")
+    assert "Ask the user which doctor" in txt, txt
+    await call("check_availability", hospital="City General", doctor="cardiologist", date="friday", part_of_day="afternoon")
+    await call("find_next_available", hospital="lotus")
+    err, booked = await call("book_appointment", hospital="City General", doctor="heart doctor", date="friday", time="2:30 pm", reason="E2E TEST")
     if not err:
         aid = int(booked.rsplit("appointment id ", 1)[1].rstrip("]"))
         created.append(aid)
+        await call("my_appointments")
         await call("reschedule_appointment", appointment_id=aid, new_date="friday", new_time="3 pm")
         await call("cancel_appointment", appointment_id=aid)
     err, _ = await call("get_schedule", date="today")

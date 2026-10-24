@@ -45,6 +45,27 @@ function id(v) {
   if (!Number.isInteger(n) || n <= 0 || n > 2147483647) throw bad('Invalid id');
   return n;
 }
+function optionalInt(v, label, min, max) {
+  if (v === undefined || v === null || v === '') return null;
+  const n = Number(v);
+  if (!Number.isInteger(n) || n < min || n > max) throw bad(`${label} must be a whole number between ${min} and ${max}`);
+  return n;
+}
+function weekdays(v) {
+  const list = Array.isArray(v) ? v : String(v ?? '').split(',').filter((x) => x.trim() !== '');
+  const days = [...new Set(list.map(Number))].sort((a, b) => a - b);
+  if (!days.length || days.some((d) => !Number.isInteger(d) || d < 0 || d > 6)) throw bad('Choose at least one working day');
+  return days.join(',');
+}
+function dateList(v) {
+  const list = Array.isArray(v) ? v : String(v ?? '').split(',').map((x) => x.trim()).filter(Boolean);
+  const dates = [...new Set(list)].sort();
+  if (dates.length > 120) throw bad('Too many days off (max 120)');
+  for (const d of dates) date(d, 'Day off');
+  return dates;
+}
+// Validated YYYY-MM-DD values only, so a literal is safe and sidesteps empty-array typing.
+const pgTextArray = (dates) => `{${dates.join(',')}}`;
 
 export const publicUser = (u) => ({ id: u.id, role: u.role, name: u.name, email: u.email, phone: u.phone, hospital_id: u.hospital_id });
 
@@ -79,26 +100,82 @@ async function authUser(sql, req) {
   return user ?? null;
 }
 
-function checkBookable(h, d, t) {
+// ---------- doctors ----------
+const DOCTOR_FIELDS = `d.id, d.hospital_id, d.name, d.specialty, d.qualification, d.experience_years, d.consultation_fee,
+  d.phone, d.email, d.bio, d.open_time, d.close_time, d.slot_minutes, d.days_open, d.time_off, d.available`;
+
+async function getDoctor(sql, did, { includeArchived = false } = {}) {
+  const [d] = await sql`
+    select ${sql.unsafe(DOCTOR_FIELDS)}, d.archived, h.name as hospital_name, h.city as hospital_city, h.address as hospital_address
+    from doctors d join hospitals h on h.id = d.hospital_id where d.id = ${id(did)}`;
+  if (!d || (d.archived && !includeArchived)) throw notFound('Doctor not found');
+  return d;
+}
+
+const hospitalDoctors = (sql, hid) => sql`
+  select ${sql.unsafe(DOCTOR_FIELDS)} from doctors d
+  where d.hospital_id = ${hid} and not d.archived order by d.name`;
+
+// Merges a (partial) update onto the current doctor and validates the whole record.
+function doctorRecord(body, current = {}) {
+  const pick = (k, fallback) => (body[k] !== undefined ? body[k] : current[k] !== undefined ? current[k] : fallback);
+  const rec = {
+    name: text(pick('name'), 'Doctor name', { max: 80 }),
+    specialty: text(pick('specialty'), 'Specialty', { max: 80 }),
+    qualification: text(pick('qualification', ''), 'Qualification', { max: 120, required: false }),
+    experience_years: optionalInt(pick('experience_years', null), 'Experience (years)', 0, 70),
+    consultation_fee: optionalInt(pick('consultation_fee', null), 'Consultation fee', 0, 1000000),
+    phone: text(pick('phone', ''), 'Phone', { max: 30, required: false }),
+    email: '',
+    bio: text(pick('bio', ''), 'About', { max: 500, required: false }),
+    open_time: time(pick('open_time', '09:00'), 'Start time'),
+    close_time: time(pick('close_time', '17:00'), 'End time'),
+    slot_minutes: Number(pick('slot_minutes', 30)),
+    days_open: weekdays(pick('days_open', '1,2,3,4,5,6')),
+    time_off: dateList(pick('time_off', [])),
+    available: pick('available', true),
+  };
+  const mail = pick('email', '');
+  if (mail) rec.email = email(mail);
+  if (rec.open_time >= rec.close_time) throw bad('End time must be after start time');
+  if (!SLOT_LENGTHS.includes(rec.slot_minutes)) throw bad(`Appointment length must be one of ${SLOT_LENGTHS.join(', ')} minutes`);
+  if (typeof rec.available !== 'boolean') rec.available = rec.available === 'true' || rec.available === 'on';
+  return rec;
+}
+
+// Why a doctor has no bookable slots on a date (null = bookable).
+function unavailableReason(doctor, d) {
+  if (!doctor.available) return 'unavailable';
+  if (d < localDate()) return 'past';
+  if ((doctor.time_off || []).includes(d)) return 'day_off';
+  if (!isOpenOn(doctor, d)) return 'not_working';
+  return null;
+}
+
+function checkBookable(doctor, d, t) {
   const today = localDate();
+  if (!doctor.available) throw bad(`${doctor.name} isn't taking appointments right now`);
   if (d < today || (d === today && t <= localTime())) throw bad('That time has already passed');
   if (d > addDays(today, 60)) throw bad('You can book up to 60 days in advance');
-  if (!isOpenOn(h, d)) throw bad(`${h.name} is closed on that day`);
-  if (!slotTimes(h).includes(t)) throw bad('That is not a valid time slot');
+  if ((doctor.time_off || []).includes(d)) throw bad(`${doctor.name} is off on that day`);
+  if (!isOpenOn(doctor, d)) throw bad(`${doctor.name} doesn't work on that day`);
+  if (!slotTimes(doctor).includes(t)) throw bad(`That isn't one of ${doctor.name}'s appointment times`);
 }
 
 const patientAppointment = async (sql, aid) => (await sql`
-  select a.id, a.hospital_id, a.date, a.time, a.reason, a.status, a.created_at,
-         h.name as hospital_name, h.city as hospital_city, h.address as hospital_address, h.phone as hospital_phone, h.slot_minutes
-  from appointments a join hospitals h on h.id = a.hospital_id
+  select a.id, a.hospital_id, a.doctor_id, a.date, a.time, a.reason, a.status, a.created_at,
+         h.name as hospital_name, h.city as hospital_city, h.address as hospital_address, h.phone as hospital_phone,
+         d.name as doctor_name, d.specialty as doctor_specialty, d.slot_minutes
+  from appointments a join hospitals h on h.id = a.hospital_id join doctors d on d.id = a.doctor_id
   where a.id = ${aid}`)[0];
 
 const patientsOfHospital = (sql, hid) => sql`
   select u.id, u.name, u.email, u.phone,
          count(*) as visits,
          max(a.date) as last_date,
-         count(*) filter (where a.status = 'booked' and a.date >= ${localDate()}) as upcoming
-  from appointments a join users u on u.id = a.patient_id
+         count(*) filter (where a.status = 'booked' and a.date >= ${localDate()}) as upcoming,
+         string_agg(distinct d.name, ', ') as doctors
+  from appointments a join users u on u.id = a.patient_id join doctors d on d.id = a.doctor_id
   where a.hospital_id = ${hid}
   group by u.id order by last_date desc, u.name`;
 
@@ -147,63 +224,96 @@ route('PUT', '/api/me', [], async ({ sql, user, body }) => {
   return publicUser({ ...user, name, phone });
 });
 
-// ----- hospitals (browsing) -----
-route('GET', '/api/hospitals', [], ({ sql }) =>
-  sql`select id, name, city, address, phone, specialties, open_time, close_time, slot_minutes, days_open from hospitals order by name`);
+// ----- hospitals & doctors (browsing) -----
+route('GET', '/api/hospitals', [], ({ sql }) => sql`
+  select h.id, h.name, h.city, h.address, h.phone, h.specialties, h.open_time, h.close_time, h.slot_minutes, h.days_open,
+    (select count(*) from doctors d where d.hospital_id = h.id and not d.archived) as doctor_count,
+    (select count(*) from doctors d where d.hospital_id = h.id and not d.archived and d.available) as doctors_available,
+    (select string_agg(distinct d.specialty, ', ') from doctors d where d.hospital_id = h.id and not d.archived) as doctor_specialties,
+    (select string_agg(d.name, ', ' order by d.name) from doctors d where d.hospital_id = h.id and not d.archived) as doctor_names
+  from hospitals h order by h.name`);
 
 route('GET', '/api/hospitals/:id', [], ({ sql, params }) => getHospital(sql, params.id));
 
-route('GET', '/api/hospitals/:id/slots', [], async ({ sql, user, params, query }) => {
+route('GET', '/api/hospitals/:id/doctors', [], async ({ sql, params }) => {
   const h = await getHospital(sql, params.id);
+  return hospitalDoctors(sql, h.id);
+});
+
+// Search doctors across all hospitals by name or specialty (optionally by city).
+route('GET', '/api/doctors', [], ({ sql, query }) => {
+  const q = `%${String(query.q || '').trim().toLowerCase()}%`;
+  const city = `%${String(query.city || '').trim().toLowerCase()}%`;
+  return sql`
+    select ${sql.unsafe(DOCTOR_FIELDS)}, h.name as hospital_name, h.city as hospital_city
+    from doctors d join hospitals h on h.id = d.hospital_id
+    where not d.archived
+      and (lower(d.name) like ${q} or lower(d.specialty) like ${q} or lower(d.qualification) like ${q})
+      and lower(h.city) like ${city}
+    order by d.available desc, d.specialty, d.name limit 50`;
+});
+
+route('GET', '/api/doctors/:id', [], ({ sql, params }) => getDoctor(sql, params.id));
+
+route('GET', '/api/doctors/:id/slots', [], async ({ sql, user, params, query }) => {
+  const doctor = await getDoctor(sql, params.id);
   const d = date(query.date);
-  const today = localDate();
-  const open = isOpenOn(h, d);
-  if (!open || d < today) return { date: d, open: open && d >= today, slots: [] };
+  const reason = unavailableReason(doctor, d);
+  if (reason) return { date: d, open: false, reason, slots: [] };
   const taken = new Map(
-    (await sql`select time, patient_id from appointments where hospital_id = ${h.id} and date = ${d} and status <> 'cancelled'`)
+    (await sql`select time, patient_id from appointments where doctor_id = ${doctor.id} and date = ${d} and status <> 'cancelled'`)
       .map((r) => [r.time, r.patient_id]),
   );
+  const today = localDate();
   const now = localTime();
-  const slots = slotTimes(h).map((t) => {
+  const slots = slotTimes(doctor).map((t) => {
     const pid = taken.get(t);
     let status = 'free';
     if (pid !== undefined) status = pid === user.id ? 'mine' : 'taken';
     else if (d === today && t <= now) status = 'past';
     return { time: t, status };
   });
-  return { date: d, open: true, slots };
+  return { date: d, open: true, reason: null, slots };
 });
 
 // ----- appointments -----
 route('GET', '/api/appointments', [], async ({ sql, user, query }) => {
   if (user.role === 'patient') {
     return sql`
-      select a.id, a.hospital_id, a.date, a.time, a.reason, a.status, a.created_at,
-             h.name as hospital_name, h.city as hospital_city, h.address as hospital_address, h.phone as hospital_phone, h.slot_minutes
-      from appointments a join hospitals h on h.id = a.hospital_id
+      select a.id, a.hospital_id, a.doctor_id, a.date, a.time, a.reason, a.status, a.created_at,
+             h.name as hospital_name, h.city as hospital_city, h.address as hospital_address, h.phone as hospital_phone,
+             d.name as doctor_name, d.specialty as doctor_specialty, d.slot_minutes
+      from appointments a join hospitals h on h.id = a.hospital_id join doctors d on d.id = a.doctor_id
       where a.patient_id = ${user.id} order by a.date desc, a.time desc limit 300`;
   }
   const hid = user.role === 'hospital' ? user.hospital_id : id(query.hospitalId);
   const from = query.from ? date(query.from, 'from') : localDate();
   const to = query.to ? date(query.to, 'to') : addDays(from, 31);
+  const doctorId = query.doctorId ? id(query.doctorId) : null;
   return sql`
-    select a.id, a.date, a.time, a.reason, a.status, a.created_at,
+    select a.id, a.date, a.time, a.reason, a.status, a.created_at, a.doctor_id,
+           d.name as doctor_name, d.specialty as doctor_specialty,
            u.id as patient_id, u.name as patient_name, u.phone as patient_phone, u.email as patient_email
-    from appointments a join users u on u.id = a.patient_id
+    from appointments a join users u on u.id = a.patient_id join doctors d on d.id = a.doctor_id
     where a.hospital_id = ${hid} and a.date between ${from} and ${to}
-    order by a.date, a.time`;
+      ${doctorId ? sql`and a.doctor_id = ${doctorId}` : sql``}
+    order by a.date, a.time, d.name`;
 });
 
 route('POST', '/api/appointments', ['patient'], async ({ sql, user, body }) => {
-  const h = await getHospital(sql, body.hospitalId);
+  if (body.doctorId == null) throw bad('Choose a doctor first');
+  const doctor = await getDoctor(sql, body.doctorId);
+  if (body.hospitalId != null && Number(body.hospitalId) !== doctor.hospital_id) throw bad("That doctor doesn't work at this hospital");
   const d = date(body.date);
   const t = time(body.time);
   const reason = text(body.reason, 'Reason', { max: 500, required: false });
-  checkBookable(h, d, t);
+  checkBookable(doctor, d, t);
   const [clash] = await sql`select 1 from appointments where patient_id = ${user.id} and date = ${d} and time = ${t} and status <> 'cancelled'`;
   if (clash) throw new HttpError(409, 'You already have another appointment at that time');
-  // The partial unique index guarantees nobody else holds this slot (see error handler).
-  const [a] = await sql`insert into appointments (hospital_id, patient_id, date, time, reason) values (${h.id}, ${user.id}, ${d}, ${t}, ${reason}) returning id`;
+  // The unique index on (doctor_id, date, time) guarantees nobody else holds this slot.
+  const [a] = await sql`
+    insert into appointments (hospital_id, doctor_id, patient_id, date, time, reason)
+    values (${doctor.hospital_id}, ${doctor.id}, ${user.id}, ${d}, ${t}, ${reason}) returning id`;
   await enqueue(sql, 'appointment.booked', { id: a.id });
   return patientAppointment(sql, a.id);
 });
@@ -230,11 +340,12 @@ route('POST', '/api/appointments/:id/reschedule', ['patient'], async ({ sql, use
   const [a] = await sql`select * from appointments where id = ${id(params.id)}`;
   if (!a || a.patient_id !== user.id) throw notFound('Appointment not found');
   if (a.status !== 'booked') throw new HttpError(409, `This appointment is already ${a.status}`);
-  const h = await getHospital(sql, a.hospital_id);
+  const doctor = await getDoctor(sql, a.doctor_id, { includeArchived: true });
+  if (doctor.archived) throw new HttpError(409, `${doctor.name} no longer works at ${doctor.hospital_name}. Please book a new appointment.`);
   const d = date(body.date);
   const t = time(body.time);
   if (d === a.date && t === a.time) throw bad('Pick a different time to reschedule');
-  checkBookable(h, d, t);
+  checkBookable(doctor, d, t);
   const [clash] = await sql`select 1 from appointments where patient_id = ${user.id} and date = ${d} and time = ${t} and status <> 'cancelled' and id <> ${a.id}`;
   if (clash) throw new HttpError(409, 'You already have another appointment at that time');
   await sql`update appointments set date = ${d}, time = ${t} where id = ${a.id}`;
@@ -253,16 +364,71 @@ route('PUT', '/api/hospital/settings', ['hospital'], async ({ sql, user, body })
   if (open >= close) throw bad('Closing time must be after opening time');
   const slot = Number(body.slot_minutes);
   if (!SLOT_LENGTHS.includes(slot)) throw bad(`Slot length must be one of ${SLOT_LENGTHS.join(', ')} minutes`);
-  const days = Array.isArray(body.days_open) ? [...new Set(body.days_open.map(Number))].sort() : [];
-  if (!days.length || days.some((d) => !Number.isInteger(d) || d < 0 || d > 6)) throw bad('Choose at least one working day');
   await sql`
     update hospitals set
       phone = ${text(body.phone, 'Phone', { max: 30, required: false })},
       address = ${text(body.address, 'Address', { max: 200, required: false })},
       specialties = ${text(body.specialties, 'Specialties', { max: 300, required: false })},
-      open_time = ${open}, close_time = ${close}, slot_minutes = ${slot}, days_open = ${days.join(',')}
+      open_time = ${open}, close_time = ${close}, slot_minutes = ${slot}, days_open = ${weekdays(body.days_open)}
     where id = ${user.hospital_id}`;
   return getHospital(sql, user.hospital_id);
+});
+
+route('GET', '/api/hospital/doctors', ['hospital'], ({ sql, user }) => sql`
+  select ${sql.unsafe(DOCTOR_FIELDS)},
+    (select count(*) from appointments a where a.doctor_id = d.id and a.status = 'booked' and a.date >= ${localDate()}) as upcoming,
+    (select count(*) from appointments a where a.doctor_id = d.id and a.date = ${localDate()} and a.status <> 'cancelled') as today,
+    (select count(*) from appointments a where a.doctor_id = d.id) as total
+  from doctors d where d.hospital_id = ${user.hospital_id} and not d.archived order by d.name`);
+
+route('POST', '/api/hospital/doctors', ['hospital'], async ({ sql, user, body }) => {
+  const r = doctorRecord(body);
+  const [row] = await sql`
+    insert into doctors (hospital_id, name, specialty, qualification, experience_years, consultation_fee, phone, email, bio,
+                         open_time, close_time, slot_minutes, days_open, time_off, available)
+    values (${user.hospital_id}, ${r.name}, ${r.specialty}, ${r.qualification}, ${r.experience_years}, ${r.consultation_fee},
+            ${r.phone}, ${r.email}, ${r.bio}, ${r.open_time}, ${r.close_time}, ${r.slot_minutes}, ${r.days_open},
+            ${pgTextArray(r.time_off)}::text[], ${r.available})
+    returning id`;
+  return { ...(await getDoctor(sql, row.id)), upcoming: 0, today: 0, total: 0 };
+});
+
+async function ownDoctor(sql, user, did) {
+  const doctor = await getDoctor(sql, did);
+  if (doctor.hospital_id !== user.hospital_id) throw notFound('Doctor not found');
+  return doctor;
+}
+
+route('PUT', '/api/hospital/doctors/:id', ['hospital'], async ({ sql, user, params, body }) => {
+  const current = await ownDoctor(sql, user, params.id);
+  const r = doctorRecord(body, current);
+  await sql`
+    update doctors set name = ${r.name}, specialty = ${r.specialty}, qualification = ${r.qualification},
+      experience_years = ${r.experience_years}, consultation_fee = ${r.consultation_fee}, phone = ${r.phone},
+      email = ${r.email}, bio = ${r.bio}, open_time = ${r.open_time}, close_time = ${r.close_time},
+      slot_minutes = ${r.slot_minutes}, days_open = ${r.days_open}, time_off = ${pgTextArray(r.time_off)}::text[],
+      available = ${r.available}
+    where id = ${current.id}`;
+  const [counts] = await sql`
+    select count(*) filter (where status = 'booked' and date >= ${localDate()}) as upcoming,
+           count(*) filter (where date = ${localDate()} and status <> 'cancelled') as today,
+           count(*) as total
+    from appointments where doctor_id = ${current.id}`;
+  return { ...(await getDoctor(sql, current.id)), ...counts };
+});
+
+route('DELETE', '/api/hospital/doctors/:id', ['hospital'], async ({ sql, user, params }) => {
+  const doctor = await ownDoctor(sql, user, params.id);
+  const [{ upcoming, total }] = await sql`
+    select count(*) filter (where status = 'booked' and date >= ${localDate()}) as upcoming, count(*) as total
+    from appointments where doctor_id = ${doctor.id}`;
+  if (upcoming > 0) {
+    throw new HttpError(409, `${doctor.name} has ${upcoming} upcoming appointment${upcoming === 1 ? '' : 's'}. Cancel them first, or mark the doctor unavailable instead.`);
+  }
+  // Doctors with past appointments are archived so visit history keeps their name.
+  if (total > 0) await sql`update doctors set archived = true, available = false where id = ${doctor.id}`;
+  else await sql`delete from doctors where id = ${doctor.id}`;
+  return { id: doctor.id, archived: total > 0 };
 });
 
 // ----- admin -----
@@ -271,6 +437,7 @@ route('GET', '/api/admin/stats', ['admin'], async ({ sql }) => (await readStats(
 route('GET', '/api/admin/hospitals', ['admin'], ({ sql }) => sql`
   select h.*,
     (select email from users where hospital_id = h.id and role = 'hospital' limit 1) as login_email,
+    (select count(*) from doctors where hospital_id = h.id and not archived) as doctors,
     (select count(distinct patient_id) from appointments where hospital_id = h.id) as patients,
     (select count(*) from appointments where hospital_id = h.id) as appointments,
     (select count(*) from appointments where hospital_id = h.id and status = 'booked' and date >= ${localDate()}) as upcoming
@@ -302,26 +469,35 @@ route('POST', '/api/admin/hospitals', ['admin'], async ({ sql, body }) => {
     throw err;
   }
   await enqueue(sql, 'hospital.created', { hospitalId: hid });
-  return { ...(await getHospital(sql, hid)), login_email: mail, patients: 0, appointments: 0, upcoming: 0 };
+  return { ...(await getHospital(sql, hid)), login_email: mail, doctors: 0, patients: 0, appointments: 0, upcoming: 0 };
 });
 
 route('DELETE', '/api/admin/hospitals/:id', ['admin'], async ({ sql, params }) => {
   const h = await getHospital(sql, params.id);
-  await sql`delete from hospitals where id = ${h.id}`;
+  // Appointments reference doctors, so remove them before the hospital (which cascades to doctors).
+  await sql.begin(async (tx) => {
+    await tx`delete from appointments where hospital_id = ${h.id}`;
+    await tx`delete from hospitals where id = ${h.id}`;
+  });
   await enqueue(sql, 'stats.refresh');
 });
 
 route('GET', '/api/admin/hospitals/:id', ['admin'], async ({ sql, params }) => {
   const h = await getHospital(sql, params.id);
-  const [[login], patients, appointments] = await Promise.all([
+  const [[login], patients, appointments, doctors] = await Promise.all([
     sql`select email from users where hospital_id = ${h.id} and role = 'hospital' limit 1`,
     patientsOfHospital(sql, h.id),
     sql`
-      select a.id, a.date, a.time, a.reason, a.status, u.name as patient_name
-      from appointments a join users u on u.id = a.patient_id
+      select a.id, a.date, a.time, a.reason, a.status, u.name as patient_name, d.name as doctor_name
+      from appointments a join users u on u.id = a.patient_id join doctors d on d.id = a.doctor_id
       where a.hospital_id = ${h.id} order by a.date desc, a.time desc limit 100`,
+    sql`
+      select ${sql.unsafe(DOCTOR_FIELDS)},
+        (select count(*) from appointments a where a.doctor_id = d.id and a.status = 'booked' and a.date >= ${localDate()}) as upcoming,
+        (select count(*) from appointments a where a.doctor_id = d.id) as total
+      from doctors d where d.hospital_id = ${h.id} and not d.archived order by d.name`,
   ]);
-  return { hospital: { ...h, login_email: login?.email ?? '' }, patients, appointments };
+  return { hospital: { ...h, login_email: login?.email ?? '' }, patients, appointments, doctors };
 });
 
 route('GET', '/api/admin/patients', ['admin'], async ({ sql }) => {
@@ -352,8 +528,9 @@ route('GET', '/api/admin/patients/:id', ['admin'], async ({ sql, params }) => {
   const [p] = await sql`select id, name, email, phone, created_at from users where id = ${id(params.id)} and role = 'patient'`;
   if (!p) throw notFound('Patient not found');
   const appointments = await sql`
-    select a.id, a.date, a.time, a.reason, a.status, h.id as hospital_id, h.name as hospital_name, h.city as hospital_city
-    from appointments a join hospitals h on h.id = a.hospital_id
+    select a.id, a.date, a.time, a.reason, a.status, h.id as hospital_id, h.name as hospital_name, h.city as hospital_city,
+           d.name as doctor_name, d.specialty as doctor_specialty
+    from appointments a join hospitals h on h.id = a.hospital_id join doctors d on d.id = a.doctor_id
     where a.patient_id = ${p.id} order by a.date desc, a.time desc`;
   return { patient: p, appointments };
 });
@@ -406,7 +583,7 @@ export async function handleApi(req, res, url) {
     sendJson(res, result === undefined ? 204 : 200, result);
   } catch (err) {
     if (err instanceof HttpError) sendJson(res, err.status, { error: err.message });
-    else if (isUniqueViolation(err, 'uniq_active_slot')) {
+    else if (isUniqueViolation(err, 'uniq_active_doctor_slot') || isUniqueViolation(err, 'uniq_active_slot')) {
       sendJson(res, 409, { error: 'Sorry, that slot was just booked by someone else. Please pick another time.' });
     } else {
       console.error(err);

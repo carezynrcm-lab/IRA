@@ -1,4 +1,4 @@
-// ERA client: a dependency-free single-page app.
+// IRA client: a dependency-free single-page app.
 //
 // Speed comes from two ideas:
 //  1. Stale-while-revalidate cache: every view renders instantly from cached data
@@ -55,6 +55,9 @@ const ICONS = {
   shield: '<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>',
   inbox: '<path d="M22 12h-6l-2 3h-4l-2-3H2"/><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/>',
   edit: '<path d="M12 20h9M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/>',
+  stethoscope: '<path d="M11 2v2M5 2v2M5 3H4a2 2 0 0 0-2 2v4a6 6 0 0 0 12 0V5a2 2 0 0 0-2-2h-1"/><path d="M8 15a6 6 0 0 0 12 0v-3"/><circle cx="20" cy="10" r="2"/>',
+  award: '<circle cx="12" cy="8" r="6"/><path d="M15.48 12.89 17 22l-5-3-5 3 1.52-9.11"/>',
+  toggle: '<rect x="1" y="5" width="22" height="14" rx="7"/><circle cx="16" cy="12" r="3"/>',
   sunrise: '<path d="M12 2v8M4.93 10.93l1.41 1.41M2 18h2M20 18h2M19.07 10.93l-1.41 1.41M22 22H2M8 6l4-4 4 4M16 18a4 4 0 0 0-8 0"/>',
 };
 const icon = (name, cls = 'i') => raw(`<svg class="${cls}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICONS[name]}</svg>`);
@@ -120,12 +123,21 @@ function firstOpenDate(h) {
   }
   return t;
 }
-function slotsPerDay(open, close, len) {
-  const toM = (t) => { const [h, m] = t.split(':').map(Number); return h * 60 + m; };
-  return Math.max(0, Math.floor((toM(close) - toM(open)) / len));
-}
 const tags = (s) => (s || '').split(',').map((x) => x.trim()).filter(Boolean);
-const slotsKey = (hid, d) => `/hospitals/${hid}/slots?date=${d}`;
+// Doctors: their own weekly days, hours, slot length, days off and availability.
+const docWorksOn = (doc, d) => isOpenOn(doc, d) && !(doc.time_off || []).includes(d);
+const doctorSlotsKey = (did, d) => `/doctors/${did}/slots?date=${d}`;
+const doctorsKey = (hid) => `/hospitals/${hid}/doctors`;
+function firstWorkingDate(doc) {
+  const t = today();
+  for (let i = 0; i < 14; i++) {
+    const d = addDays(t, i);
+    if (docWorksOn(doc, d) && !(i === 0 && nowHM() >= doc.close_time)) return d;
+  }
+  return t;
+}
+const feeLabel = (doc) => (doc.consultation_fee != null ? `₹${doc.consultation_fee}` : '');
+const doctorMeta = (doc) => [doc.qualification, doc.experience_years != null ? `${doc.experience_years} yrs exp` : ''].filter(Boolean).join(' · ');
 function monthKey(month) {
   const [y, m] = month.split('-').map(Number);
   return `/appointments?from=${month}-01&to=${ymd(new Date(y, m, 0))}`;
@@ -158,11 +170,11 @@ function downloadIcs(a) {
   const end = new Date(start.getTime() + (a.slot_minutes || 30) * 60000);
   const icsText = (s) => String(s || '').replace(/[,;\\]/g, (c) => `\\${c}`).replace(/\n/g, '\\n');
   const ics = [
-    'BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//ERA//EN', 'BEGIN:VEVENT',
-    `UID:era-${a.id}@era`, `DTSTAMP:${new Date().toISOString().replace(/[-:]/g, '').slice(0, 15)}Z`,
+    'BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//IRA//EN', 'BEGIN:VEVENT',
+    `UID:ira-${a.id}@ira`, `DTSTAMP:${new Date().toISOString().replace(/[-:]/g, '').slice(0, 15)}Z`,
     `DTSTART:${stamp(a.date, a.time)}`, `DTEND:${stamp(ymd(end), `${pad(end.getHours())}:${pad(end.getMinutes())}`)}`,
-    `SUMMARY:${icsText(`Appointment · ${a.hospital_name}`)}`, `LOCATION:${icsText(a.hospital_address || a.hospital_city)}`,
-    `DESCRIPTION:${icsText(a.reason ? `Reason: ${a.reason}` : 'Booked with ERA')}`,
+    `SUMMARY:${icsText(`Appointment · ${a.doctor_name ? `${a.doctor_name} · ` : ''}${a.hospital_name}`)}`, `LOCATION:${icsText(a.hospital_address || a.hospital_city)}`,
+    `DESCRIPTION:${icsText(a.reason ? `Reason: ${a.reason}` : 'Booked with IRA')}`,
     'BEGIN:VALARM', 'TRIGGER:-PT1H', 'ACTION:DISPLAY', 'DESCRIPTION:Appointment reminder', 'END:VALARM',
     'END:VEVENT', 'END:VCALENDAR',
   ].join('\r\n');
@@ -177,8 +189,8 @@ const reduceMotion = () => matchMedia('(prefers-reduced-motion: reduce)').matche
 const $app = document.getElementById('app');
 const $modal = document.getElementById('modal-root');
 const $toasts = document.getElementById('toasts');
-const SESSION_KEY = 'era.session';
-const THEME_KEY = 'era.theme';
+const SESSION_KEY = 'ira.session';
+const THEME_KEY = 'ira.theme';
 const STALE_MS = 5000;
 
 const state = {
@@ -401,7 +413,7 @@ function confirmBox({ title, text, ok = 'Confirm', danger = false, onOk }) {
 const HOME = { patient: '/hospitals', hospital: '/calendar', admin: '/overview' };
 const NAV = {
   patient: [['/hospitals', 'Hospitals', 'hospital'], ['/my', 'Appointments', 'calendar']],
-  hospital: [['/calendar', 'Calendar', 'calendar'], ['/patients', 'Patients', 'users'], ['/settings', 'Settings', 'sliders']],
+  hospital: [['/calendar', 'Calendar', 'calendar'], ['/doctors', 'Doctors', 'stethoscope'], ['/patients', 'Patients', 'users'], ['/settings', 'Settings', 'sliders']],
   admin: [['/overview', 'Overview', 'grid'], ['/admin/hospitals', 'Hospitals', 'hospital'], ['/admin/patients', 'Patients', 'users']],
 };
 
@@ -430,6 +442,7 @@ function pageFor(r) {
       break;
     case 'hospital':
       if (r.path === '/calendar') return calendarView(r.query);
+      if (r.path === '/doctors') return doctorsView();
       if (r.path === '/patients') return hospitalPatientsView();
       if (r.path === '/settings') return settingsView();
       break;
@@ -524,7 +537,7 @@ function layout(r, page, entering) {
   return html`
     <header class="topbar">
       <div class="wrap topbar-in">
-        <a class="brand" href="#${HOME[u.role]}">${LOGO} ERA</a>
+        <a class="brand" href="#${HOME[u.role]}">${LOGO} IRA</a>
         <nav class="nav">${links}</nav>
         <div class="top-right" id="top-actions">${topActions()}</div>
       </div>
@@ -582,7 +595,7 @@ function authShell(card) {
     <div class="auth">
       <div class="auth-art">
         <span class="blob b1"></span><span class="blob b2"></span>
-        <div class="brand">${LOGO_LIGHT} ERA</div>
+        <div class="brand">${LOGO_LIGHT} IRA</div>
         <div>
           <h2>Healthcare appointments, without the waiting.</h2>
           <p>Find a hospital, pick a time that suits you, and you're booked in seconds.</p>
@@ -592,12 +605,12 @@ function authShell(card) {
             <div class="feature">${icon('shield')} One platform for admins, hospitals and patients</div>
           </div>
         </div>
-        <small style="color:#fff;opacity:.7">© ${new Date().getFullYear()} ERA</small>
+        <small style="color:#fff;opacity:.7">© ${new Date().getFullYear()} IRA</small>
       </div>
       <div class="auth-side">
         <div class="theme-corner">${themeBtn()}</div>
         <div class="auth-card">
-          <div class="brand mobile-brand">${LOGO} ERA</div>
+          <div class="brand mobile-brand">${LOGO} IRA</div>
           ${card}
         </div>
       </div>
@@ -645,7 +658,7 @@ function registerView() {
 // ---------------------------------------------------------------------------
 function topSpecialties(list) {
   const counts = {};
-  for (const h of list || []) for (const t of tags(h.specialties)) counts[t] = (counts[t] || 0) + 1;
+  for (const h of list || []) for (const t of tags(h.doctor_specialties || h.specialties)) counts[t] = (counts[t] || 0) + 1;
   return Object.entries(counts).sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).slice(0, 8).map(([t]) => t);
 }
 
@@ -656,8 +669,8 @@ function hospitalsView() {
   return html`
     <section class="hero anim">
       <h1>${greeting()}, ${state.user.name.split(' ')[0]}</h1>
-      <p>Choose a hospital, pick a time that suits you, and you're booked instantly. No calls, no queues.</p>
-      ${searchBox('hq', 'Search by hospital, city or specialty…', q)}
+      <p>Choose a hospital and a doctor, pick a time that suits you, and you're booked instantly. No calls, no queues.</p>
+      ${searchBox('hq', 'Search hospital, doctor, city or specialty…', q)}
       <div class="chips">${topSpecialties(list).map((t) => html`
         <button class="chip ${q.toLowerCase() === t.toLowerCase() ? 'on' : ''}" data-action="chip" data-v="${t}">${t}</button>`)}</div>
     </section>
@@ -667,47 +680,60 @@ function hospitalsView() {
 function hospitalCards(list) {
   if (!list) return html`<div class="grid">${Array.from({ length: 4 }, () => html`<div class="skel" style="height:196px"></div>`)}</div>`;
   const q = state.search.hq.trim().toLowerCase();
-  const items = q ? list.filter((h) => `${h.name} ${h.city} ${h.specialties}`.toLowerCase().includes(q)) : list;
-  if (!items.length) return emptyBox(`No hospitals match “${state.search.hq}”.`, 'search');
+  const hay = (h) => `${h.name} ${h.city} ${h.specialties} ${h.doctor_specialties || ''} ${h.doctor_names || ''}`.toLowerCase();
+  const items = q ? list.filter((h) => hay(h).includes(q)) : list;
+  if (!items.length) return emptyBox(`No hospitals or doctors match “${state.search.hq}”.`, 'search');
   const mine = (peek('/appointments') || []).filter((a) => a.status === 'booked' && a.date >= today()).sort(byWhen);
   return html`
     <h3 class="section-title">${items.length} hospital${items.length === 1 ? '' : 's'} ${q ? 'found' : 'available'}</h3>
     <div class="grid stagger">${items.map((h) => {
       const next = mine.find((a) => a.hospital_id === h.id);
       const open = isOpenNow(h);
+      const n = h.doctor_count || 0;
       return html`
-      <a class="card hospital-card" href="#/hospital/${h.id}" data-prefetch="${slotsKey(h.id, firstOpenDate(h))}">
+      <a class="card hospital-card" href="#/hospital/${h.id}" data-prefetch="${doctorsKey(h.id)}">
         <div class="hc-top">${avatar(h.name, 'lg')}<div><h3>${h.name}</h3><div class="meta">${icon('pin')}${h.city}</div></div></div>
         <div class="hc-row">
           <span class="open-badge ${open ? 'on' : ''}">${open ? 'Open now' : 'Closed now'}</span>
-          <span class="meta">${icon('clock')}${daysLabel(h)} · ${hoursLabel(h)}</span>
+          <span class="meta">${icon('stethoscope')}${n ? `${n} doctor${n === 1 ? '' : 's'}` : 'No doctors yet'}</span>
         </div>
-        <div class="tags">${tags(h.specialties).map((t) => html`<span class="tag">${t}</span>`)}</div>
+        <div class="tags">${tags(h.doctor_specialties || h.specialties).map((t) => html`<span class="tag">${t}</span>`)}</div>
         ${next ? html`<div class="badge booked" style="align-self:flex-start;text-transform:none">Your visit · ${fmtDate(next.date)}, ${fmtTime(next.time)}</div>` : ''}
-        <div class="hc-cta">Book appointment ${icon('arrow-right')}</div>
+        <div class="hc-cta">${n ? 'Choose a doctor' : 'View hospital'} ${icon('arrow-right')}</div>
       </a>`;
     })}</div>`;
 }
 
-function dateChips(h, selected, action, extra = {}) {
+function dateChips(doc, selected, action, extra = {}) {
   const dates = Array.from({ length: 14 }, (_, i) => addDays(today(), i));
   return html`<div class="dates">${dates.map((d) => {
     const dt = parseD(d);
-    const attrs = Object.entries({ hid: h.id, date: d, ...extra }).map(([k, v]) => `data-${k}="${esc(v)}"`).join(' ');
-    return html`<button class="date-chip ${d === selected ? 'active' : ''} ${isOpenOn(h, d) ? '' : 'closed'}"
-      data-action="${action}" ${raw(attrs)} data-prefetch="${slotsKey(h.id, d)}">
-      <small>${d === today() ? 'Today' : DOW[dt.getDay()]}</small><b>${dt.getDate()}</b><small>${monShort(d)}</small>
+    const attrs = Object.entries({ did: doc.id, hid: doc.hospital_id, date: d, ...extra }).map(([k, v]) => `data-${k}="${esc(v)}"`).join(' ');
+    const off = (doc.time_off || []).includes(d);
+    return html`<button class="date-chip ${d === selected ? 'active' : ''} ${doc.available && docWorksOn(doc, d) ? '' : 'closed'}"
+      title="${off ? 'Day off' : isOpenOn(doc, d) ? '' : 'Not working'}"
+      data-action="${action}" ${raw(attrs)} data-prefetch="${doctorSlotsKey(doc.id, d)}">
+      <small>${d === today() ? 'Today' : DOW[parseD(d).getDay()]}</small><b>${dt.getDate()}</b><small>${off ? 'Off' : monShort(d)}</small>
     </button>`;
   })}</div>`;
 }
 
 const SLOT_GROUPS = [['Morning', 'sunrise', (t) => t < '12:00'], ['Afternoon', 'sun', (t) => t >= '12:00' && t < '17:00'], ['Evening', 'moon', (t) => t >= '17:00']];
 
-function slotButtons(data, { key, action, h, date, picked, current }) {
+function closedMessage(doc, data) {
+  switch (data.reason) {
+    case 'unavailable': return `${doc.name} isn't taking appointments right now. Please choose another doctor.`;
+    case 'day_off': return `${doc.name} is off on this day. Please pick another date.`;
+    case 'past': return 'That day has passed. Please pick another date.';
+    default: return `${doc.name} doesn't see patients on ${DOW[parseD(data.date).getDay()]}s. Please pick another date.`;
+  }
+}
+
+function slotButtons(data, { key, action, doc, date, picked, current }) {
   if (!data) return html`<div class="slots">${Array.from({ length: 12 }, () => html`<div class="skel" style="height:42px"></div>`)}</div>`;
-  if (!data.open) return emptyBox(`${h.name} is closed on this day. Please pick another date.`, 'calendar', false);
+  if (!data.open) return emptyBox(closedMessage(doc, data), 'calendar', false);
   const usable = data.slots.some((s) => s.status === 'free' || s.status === 'mine');
-  if (!data.slots.length || !usable) return emptyBox('Fully booked on this day. Try another date.', 'calendar', false);
+  if (!data.slots.length || !usable) return emptyBox(`${doc.name} is fully booked on this day. Try another date.`, 'calendar', false);
   const anim = fresh(`slots:${action}`, key);
   return html`<div class="${anim ? 'fresh-slots' : ''}">${SLOT_GROUPS.map(([label, ico, test]) => {
     const slots = data.slots.filter((s) => test(s.time));
@@ -721,24 +747,34 @@ function slotButtons(data, { key, action, h, date, picked, current }) {
       const clickable = s.status === 'free';
       return html`<button class="slot ${cls}" ${clickable ? '' : 'disabled'}
         title="${s.status === 'mine' ? 'Your appointment' : clickable ? 'Choose this time' : 'Not available'}"
-        data-action="${action}" data-hid="${h.id}" data-date="${date}" data-time="${s.time}">${fmtTime(s.time)}</button>`;
+        data-action="${action}" data-did="${doc.id}" data-hid="${doc.hospital_id}" data-date="${date}" data-time="${s.time}">${fmtTime(s.time)}</button>`;
     })}</div></div>`;
   })}</div>`;
 }
 
+function doctorCard(doc, hid) {
+  const body = html`
+    <div class="hc-top">${avatar(doc.name, 'lg round')}<div><h3>${doc.name}</h3><div class="meta">${doc.specialty}</div></div></div>
+    ${doctorMeta(doc) ? html`<div class="meta">${icon('award')}${doctorMeta(doc)}</div>` : ''}
+    <div class="meta">${icon('clock')}${daysLabel(doc)} · ${hoursLabel(doc)}</div>
+    ${doc.bio ? html`<p class="meta clamp">${doc.bio}</p>` : ''}
+    <div class="hc-row">
+      <span class="badge ${doc.available ? 'booked' : 'cancelled'}">${doc.available ? 'Available' : 'Not available'}</span>
+      ${feeLabel(doc) ? html`<b>${feeLabel(doc)} <small class="muted">fee</small></b>` : ''}
+    </div>
+    <div class="hc-cta">${doc.available ? html`See times ${icon('arrow-right')}` : 'Not taking appointments'}</div>`;
+  return doc.available
+    ? html`<a class="card hospital-card doctor-card" href="#/hospital/${hid}?doctor=${doc.id}" data-prefetch="${doctorSlotsKey(doc.id, firstWorkingDate(doc))}">${body}</a>`
+    : html`<div class="card hospital-card doctor-card off">${body}</div>`;
+}
+
 function hospitalView(hid, query) {
   const h = get(`/hospitals/${hid}`, peek('/hospitals')?.find((x) => String(x.id) === hid));
+  const doctors = get(doctorsKey(hid));
   if (!h) return skeleton(2, 160);
-  const dates = Array.from({ length: 14 }, (_, i) => addDays(today(), i));
-  const date = dates.includes(query.date) ? query.date : firstOpenDate(h);
-  const key = slotsKey(h.id, date);
-  const data = get(key);
-  // Warm the cache for the next couple of open days so switching dates is instant.
-  dates.filter((d) => d > date && isOpenOn(h, d)).slice(0, 2).forEach((d) => prefetch(slotsKey(h.id, d)));
-  const free = data?.slots?.filter((s) => s.status === 'free').length;
-
-  return html`
-    <a class="back" href="#/hospitals">${icon('arrow-left')} All hospitals</a>
+  const doc = doctors?.find((d) => String(d.id) === query.doctor) || (doctors?.length === 1 ? doctors[0] : null);
+  const head = html`
+    <a class="back" href="${doc && doctors.length > 1 ? `#/hospital/${h.id}` : '#/hospitals'}">${icon('arrow-left')} ${doc && doctors.length > 1 ? 'All doctors' : 'All hospitals'}</a>
     <div class="hosp-head anim">
       <div class="who-block">${avatar(h.name, 'lg')}
         <div><h1>${h.name}</h1><div class="tags">${tags(h.specialties).map((t) => html`<span class="tag">${t}</span>`)}</div></div>
@@ -749,10 +785,35 @@ function hospitalView(hid, query) {
       ${h.phone ? html`<span class="info-pill">${icon('phone')}${h.phone}</span>` : ''}
       <span class="info-pill">${icon('clock')}${daysLabel(h)} · ${hoursLabel(h)}</span>
       <span class="open-badge ${isOpenNow(h) ? 'on' : ''} info-pill">${isOpenNow(h) ? 'Open now' : 'Closed now'}</span>
+    </div>`;
+  if (!doctors) return html`${head}${skeleton(2, 140)}`;
+  if (!doctors.length) return html`${head}${emptyBox(`${h.name} hasn't added any doctors yet. Please check back soon.`, 'stethoscope')}`;
+  if (!doc) {
+    return html`${head}
+      <h3 class="section-title">Choose a doctor <span class="count-pill">${doctors.length}</span></h3>
+      <div class="grid stagger">${doctors.map((d) => doctorCard(d, h.id))}</div>`;
+  }
+
+  const dates = Array.from({ length: 14 }, (_, i) => addDays(today(), i));
+  const date = dates.includes(query.date) ? query.date : firstWorkingDate(doc);
+  const key = doctorSlotsKey(doc.id, date);
+  const data = get(key);
+  // Warm the cache for the next couple of working days so switching dates is instant.
+  dates.filter((d) => d > date && docWorksOn(doc, d)).slice(0, 2).forEach((d) => prefetch(doctorSlotsKey(doc.id, d)));
+  const free = data?.slots?.filter((s) => s.status === 'free').length;
+  return html`${head}
+    <div class="card doctor-bar anim">
+      ${avatar(doc.name, 'lg round')}
+      <div class="doctor-bar-main">
+        <h2>${doc.name}</h2>
+        <div class="meta">${doc.specialty}${doctorMeta(doc) ? ` · ${doctorMeta(doc)}` : ''}</div>
+        <div class="meta">${icon('clock')}${daysLabel(doc)} · ${hoursLabel(doc)} · ${doc.slot_minutes} min${feeLabel(doc) ? ` · Fee ${feeLabel(doc)}` : ''}</div>
+      </div>
+      ${doctors.length > 1 ? html`<a class="btn ghost sm" href="#/hospital/${h.id}">Change doctor</a>` : ''}
     </div>
-    <div class="card anim">
+    <div class="card anim" style="margin-top:16px">
       <h2>Choose a date</h2>
-      ${dateChips(h, date, 'pick-date')}
+      ${dateChips(doc, date, 'pick-date')}
       <div class="card-head" style="margin-top:6px">
         <h2>${fmtDate(date, true)}</h2>
         ${data?.open ? html`<span class="count-pill">${free} slot${free === 1 ? '' : 's'} open</span>` : ''}
@@ -762,18 +823,21 @@ function hospitalView(hid, query) {
         <span><i style="background:var(--surface-2);border-color:transparent"></i>Booked</span>
         <span><i style="background:var(--grad);border-color:transparent"></i>Your booking</span>
       </div>
-      ${slotButtons(data, { key, action: 'pick-slot', h, date })}
+      ${slotButtons(data, { key, action: 'pick-slot', doc, date })}
     </div>`;
 }
 
-function bookingModal({ hid, date, time }) {
+function bookingModal({ did, hid, date, time }) {
   const h = peek(`/hospitals/${hid}`);
+  const doc = peek(doctorsKey(hid))?.find((x) => String(x.id) === String(did));
   return html`
     <div class="modal-top"><h3>Confirm appointment</h3>${closeBtn()}</div>
     <p class="lead">Check the details, then confirm. You'll get a notification right away.</p>
-    <div class="summary-box">${avatar(h?.name || 'H')}<div><b>${h?.name}</b>
-      <span class="meta">${icon('calendar')}${fmtDate(date, true)} · ${fmtTime(time)}</span></div></div>
+    <div class="summary-box">${avatar(doc?.name || 'Dr', 'round')}<div><b>${doc?.name}</b>
+      <span class="meta">${doc?.specialty} · ${h?.name}</span>
+      <span class="meta">${icon('calendar')}${fmtDate(date, true)} · ${fmtTime(time)}${doc && feeLabel(doc) ? ` · Fee ${feeLabel(doc)}` : ''}</span></div></div>
     <form data-form="book">
+      <input type="hidden" name="doctorId" value="${did}">
       <input type="hidden" name="hospitalId" value="${hid}">
       <input type="hidden" name="date" value="${date}">
       <input type="hidden" name="time" value="${time}">
@@ -808,11 +872,14 @@ function myAppointmentsView() {
     ${history.length ? html`<div class="stack stagger">${history.slice(0, 30).map((a) => patientApptCard(a, false))}</div>` : emptyBox('Nothing here yet.')}`;
 }
 
+const withDoctor = (a) => [a.doctor_name, a.doctor_specialty].filter(Boolean).join(' · ');
+
 function nextCard(a) {
   return html`
     <div class="card next-card anim">
       <div class="label">${a.pending ? 'Confirming…' : 'Next appointment'}</div>
       <div class="big">${fmtDate(a.date, true)} · ${fmtTime(a.time)}</div>
+      <div class="sub"><b>${withDoctor(a)}</b></div>
       <div class="sub">${a.hospital_name}${a.hospital_address ? ` · ${a.hospital_address}` : ''}</div>
       ${a.reason ? html`<div class="sub" style="opacity:.8;margin-top:4px">Reason: ${a.reason}</div>` : ''}
       <span class="countdown">${countdown(a)}</span>
@@ -831,7 +898,8 @@ function patientApptCard(a, upcoming) {
       <div class="appt-main">
         <div class="date-tile ${upcoming ? '' : 'dim'}"><small>${monShort(a.date)}</small><b>${dt.getDate()}</b><small>${DOW[dt.getDay()]}</small></div>
         <div>
-          <div class="when">${a.hospital_name}</div>
+          <div class="when">${a.doctor_name || a.hospital_name}</div>
+          <div class="meta">${a.doctor_specialty ? `${a.doctor_specialty} · ` : ''}${a.hospital_name}</div>
           <div class="meta">${icon('clock')}${fmtTime(a.time)} · ${fmtDate(a.date, true)}</div>
           ${a.reason ? html`<div class="meta">${a.reason}</div>` : ''}
         </div>
@@ -842,7 +910,7 @@ function patientApptCard(a, upcoming) {
           <button class="btn ghost sm" data-action="reschedule" data-id="${a.id}">${icon('repeat')} Reschedule</button>
           <button class="btn ghost sm icon-only" data-action="ics" data-id="${a.id}" title="Add to calendar" aria-label="Add to calendar">${icon('calendar-plus')}</button>
           <button class="btn danger-ghost sm" data-action="patient-cancel" data-id="${a.id}">Cancel</button>` : ''}
-        ${!upcoming ? html`<a class="btn ghost sm" href="#/hospital/${a.hospital_id}">Book again</a>` : ''}
+        ${!upcoming ? html`<a class="btn ghost sm" href="#/hospital/${a.hospital_id}${a.doctor_id ? `?doctor=${a.doctor_id}` : ''}">Book again</a>` : ''}
       </div>
     </div>`;
 }
@@ -850,15 +918,15 @@ function patientApptCard(a, upcoming) {
 function rescheduleView() {
   const rs = state.resched;
   const a = peek('/appointments')?.find((x) => x.id === rs.id);
-  const h = get(`/hospitals/${rs.hid}`, peek('/hospitals')?.find((x) => x.id === rs.hid));
-  if (!a || !h) return html`<div class="modal-top"><h3>Reschedule</h3>${closeBtn()}</div>${skeleton(2, 80)}`;
-  const key = slotsKey(h.id, rs.date);
+  const doc = get(`/doctors/${rs.did}`, peek(doctorsKey(rs.hid))?.find((x) => x.id === rs.did));
+  if (!a || !doc) return html`<div class="modal-top"><h3>Reschedule</h3>${closeBtn()}</div>${skeleton(2, 80)}`;
+  const key = doctorSlotsKey(doc.id, rs.date);
   const data = get(key);
   return html`
     <div class="modal-top"><h3>Reschedule appointment</h3>${closeBtn()}</div>
-    <p class="lead">${h.name} · currently <b>${fmtDate(a.date)} at ${fmtTime(a.time)}</b></p>
-    ${dateChips(h, rs.date, 'rs-date')}
-    ${slotButtons(data, { key, action: 'rs-slot', h, date: rs.date, picked: rs.time, current: rs.date === a.date ? a.time : null })}
+    <p class="lead">${doc.name} · ${a.hospital_name}<br>Currently <b>${fmtDate(a.date)} at ${fmtTime(a.time)}</b></p>
+    ${dateChips(doc, rs.date, 'rs-date')}
+    ${slotButtons(data, { key, action: 'rs-slot', doc, date: rs.date, picked: rs.time, current: rs.date === a.date ? a.time : null })}
     <div class="modal-actions">
       <button class="btn ghost" data-action="close-modal">Keep current time</button>
       <button class="btn grad" data-action="rs-confirm" ${rs.time ? '' : 'disabled'}>
@@ -884,16 +952,26 @@ function profileModal() {
 // ---------------------------------------------------------------------------
 // Hospital views
 // ---------------------------------------------------------------------------
+function doctorFilterChips(doctors, selected, month, day) {
+  if (!doctors || doctors.length < 2) return '';
+  const chip = (id, label) => html`<button class="fchip ${String(selected || '') === String(id) ? 'on' : ''}"
+    data-action="cal-doctor" data-doctor="${id}" data-month="${month}" data-day="${day}">${label}</button>`;
+  return html`<div class="filter-chips anim">${chip('', 'All doctors')}${doctors.map((d) => chip(d.id, d.name))}</div>`;
+}
+
 function calendarView(query) {
   const t = today();
   const month = /^\d{4}-\d{2}$/.test(query.month || '') ? query.month : t.slice(0, 7);
   const sel = query.day?.startsWith(month) ? query.day : t.startsWith(month) ? t : `${month}-01`;
   const key = monthKey(month);
   const list = get(key);
+  const doctors = get('/hospital/doctors');
   prefetch(monthKey(shiftMonth(month, 1)));
   prefetch(monthKey(shiftMonth(month, -1)));
+  const docFilter = doctors?.some((d) => String(d.id) === query.doctor) ? query.doctor : '';
+  const docName = docFilter ? doctors.find((d) => String(d.id) === docFilter).name : '';
 
-  const all = list || [];
+  const all = (list || []).filter((a) => !docFilter || String(a.doctor_id) === docFilter);
   const counts = {};
   for (const a of all) if (a.status !== 'cancelled') counts[a.date] = (counts[a.date] || 0) + 1;
   const [y, m] = month.split('-').map(Number);
@@ -904,11 +982,11 @@ function calendarView(query) {
     const c = counts[d] || 0;
     const cls = [d === t && 'today', d === sel && 'sel', d < t && 'past-day'].filter(Boolean).join(' ');
     const dots = c ? Math.min(3, c >= 4 ? 3 : c >= 2 ? 2 : 1) : 0;
-    return html`<button class="day ${cls}" data-action="cal-day" data-month="${month}" data-day="${d}"
+    return html`<button class="day ${cls}" data-action="cal-day" data-month="${month}" data-day="${d}" data-doctor="${docFilter}"
       title="${c} appointment${c === 1 ? '' : 's'}" aria-label="${fmtDate(d, true)}, ${c} appointments">
       ${i + 1}<span class="heat">${Array.from({ length: dots }, () => raw('<i></i>'))}</span></button>`;
   });
-  const dayItems = all.filter((a) => a.date === sel).sort((a, b) => a.time.localeCompare(b.time));
+  const dayItems = all.filter((a) => a.date === sel).sort((a, b) => a.time.localeCompare(b.time) || (a.doctor_name || '').localeCompare(b.doctor_name || ''));
   const activeCount = dayItems.filter((a) => a.status !== 'cancelled').length;
   const ms = {
     total: all.filter((a) => a.status !== 'cancelled').length,
@@ -916,16 +994,21 @@ function calendarView(query) {
     completed: all.filter((a) => a.status === 'completed').length,
     cancelled: all.filter((a) => a.status === 'cancelled').length,
   };
-  const calAnim = fresh('cal', month);
-  const dayAnim = fresh('day', `${sel}:${!!list}`);
+  const calAnim = fresh('cal', `${month}:${docFilter}`);
+  const dayAnim = fresh('day', `${sel}:${docFilter}:${!!list}`);
+  const noDoctors = doctors && !doctors.length;
 
   return html`
     <div class="page-head anim">
-      <div><h1>${state.hospital?.name || 'Calendar'}</h1><p>${greeting()}! You have <b>${counts[t] || 0}</b> appointment${counts[t] === 1 ? '' : 's'} today.</p></div>
-      <button class="btn ghost" data-action="export-month" data-key="${key}" data-month="${month}">${icon('download')} Export month</button>
+      <div><h1>${state.hospital?.name || 'Calendar'}</h1><p>${greeting()}! ${docName ? `${docName} has` : 'You have'} <b>${counts[t] || 0}</b> appointment${counts[t] === 1 ? '' : 's'} today.</p></div>
+      <button class="btn ghost" data-action="export-month" data-key="${key}" data-month="${month}" data-doctor="${docFilter}">${icon('download')} Export month</button>
     </div>
+    ${noDoctors ? html`<div class="card hint-card anim">${icon('stethoscope')}<div><b>Add your doctors to start taking bookings.</b>
+      <span class="meta">Patients book with a specific doctor, so they can't book until you add one.</span></div>
+      <a class="btn grad sm" href="#/doctors">${icon('plus')} Add a doctor</a></div>` : ''}
+    ${doctorFilterChips(doctors, docFilter, month, sel)}
     <div class="mini-stats stagger">
-      ${stat('Bookings this month', ms.total, 'calendar')}
+      ${stat(docName ? 'Bookings this month' : 'All bookings this month', ms.total, 'calendar')}
       ${stat('Upcoming', ms.upcoming, 'clock', 'indigo')}
       ${stat('Completed', ms.completed, 'check-circle', 'ok')}
       ${stat('Cancelled', ms.cancelled, 'x-circle', 'danger')}
@@ -934,9 +1017,9 @@ function calendarView(query) {
       <div class="card anim">
         <div class="cal-head">
           <h2>${new Date(y, m - 1, 1).toLocaleDateString(undefined, { month: 'long', year: 'numeric' })}</h2>
-          <button class="icon-btn" data-action="cal-nav" data-month="${shiftMonth(month, -1)}" aria-label="Previous month">${icon('chev-left')}</button>
-          <button class="btn ghost sm" data-action="cal-nav" data-month="${t.slice(0, 7)}" data-day="${t}">Today</button>
-          <button class="icon-btn" data-action="cal-nav" data-month="${shiftMonth(month, 1)}" aria-label="Next month">${icon('chev-right')}</button>
+          <button class="icon-btn" data-action="cal-nav" data-month="${shiftMonth(month, -1)}" data-doctor="${docFilter}" aria-label="Previous month">${icon('chev-left')}</button>
+          <button class="btn ghost sm" data-action="cal-nav" data-month="${t.slice(0, 7)}" data-day="${t}" data-doctor="${docFilter}">Today</button>
+          <button class="icon-btn" data-action="cal-nav" data-month="${shiftMonth(month, 1)}" data-doctor="${docFilter}" aria-label="Next month">${icon('chev-right')}</button>
         </div>
         <div class="cal ${calAnim ? 'fresh-cal' : ''}">
           ${WEEK.map((d) => html`<div class="dow">${DOW[d].slice(0, 2)}</div>`)}
@@ -947,22 +1030,23 @@ function calendarView(query) {
       <div class="card anim">
         <div class="card-head">
           <h2>${fmtDate(sel, true)}</h2>
-          <span class="count-pill">${activeCount} appointment${activeCount === 1 ? '' : 's'}</span>
+          <span class="count-pill">${activeCount} appointment${activeCount === 1 ? '' : 's'}${docName ? ` · ${docName}` : ''}</span>
         </div>
         ${!list ? skeleton(3, 56) : dayItems.length
-          ? html`<div class="${dayAnim ? 'fresh' : ''}">${dayItems.map((a) => timelineItem(a, key))}</div>`
-          : emptyBox('No appointments on this day.', 'calendar', false)}
+          ? html`<div class="${dayAnim ? 'fresh' : ''}">${dayItems.map((a) => timelineItem(a, key, !docFilter))}</div>`
+          : emptyBox(`No appointments${docName ? ` for ${docName}` : ''} on this day.`, 'calendar', false)}
       </div>
     </div>`;
 }
 
-function timelineItem(a, key) {
+function timelineItem(a, key, showDoctor = true) {
   return html`
     <div class="tl-item ${a.status}">
       <div class="tl-time">${fmtTime(a.time)}</div>
       <div class="tl-body">
         <div class="tl-who">${avatar(a.patient_name, 'sm')}
           <div><b>${a.patient_name}</b>
+            ${showDoctor && a.doctor_name ? html`<span class="meta">${icon('stethoscope')}${a.doctor_name}</span>` : ''}
             <span class="meta">${a.patient_phone ? html`${icon('phone')}${a.patient_phone}` : a.patient_email}</span>
             ${a.reason ? html`<span class="meta">“${a.reason}”</span>` : ''}
           </div>
@@ -977,6 +1061,98 @@ function timelineItem(a, key) {
     </div>`;
 }
 
+function doctorsView() {
+  const list = get('/hospital/doctors');
+  return html`
+    <div class="page-head anim">
+      <div><h1>Doctors</h1><p>Add your doctors with their specialty and timings. Patients book with a specific doctor.</p></div>
+      <button class="btn grad" data-action="add-doctor">${icon('plus')} Add doctor</button>
+    </div>
+    ${!list ? html`<div class="grid">${Array.from({ length: 3 }, () => html`<div class="skel" style="height:230px"></div>`)}</div>`
+      : !list.length ? emptyBox(raw('No doctors yet. Click <b>Add doctor</b> to add your first one.'), 'stethoscope')
+      : html`<div class="grid stagger">${list.map(doctorAdminCard)}</div>`}`;
+}
+
+function doctorAdminCard(d) {
+  const upcomingOff = (d.time_off || []).filter((x) => x >= today()).slice(0, 4);
+  return html`
+    <div class="card doctor-admin ${d.available ? '' : 'off'} ${d.pending ? 'is-pending' : ''}">
+      <div class="hc-top">${avatar(d.name, 'lg round')}
+        <div><h3>${d.name}</h3><div class="meta">${d.specialty}</div>
+          ${doctorMeta(d) ? html`<div class="meta">${doctorMeta(d)}</div>` : ''}</div>
+      </div>
+      <div class="meta">${icon('clock')}${daysLabel(d)} · ${hoursLabel(d)} · ${d.slot_minutes} min${feeLabel(d) ? ` · ${feeLabel(d)}` : ''}</div>
+      ${upcomingOff.length ? html`<div class="tags">${upcomingOff.map((x) => html`<span class="tag">Off ${fmtDate(x)}</span>`)}</div>` : ''}
+      <div class="doc-stats"><span><b>${d.today ?? 0}</b> today</span><span><b>${d.upcoming ?? 0}</b> upcoming</span></div>
+      <div class="doc-foot">
+        <button class="switch ${d.available ? 'on' : ''}" role="switch" aria-checked="${d.available}" data-action="toggle-available" data-id="${d.id}" ${d.pending ? 'disabled' : ''}>
+          <span class="knob"></span>${d.available ? 'Available' : 'Unavailable'}</button>
+        <div class="doc-actions">
+          <button class="btn ghost sm" data-action="edit-doctor" data-id="${d.id}" ${d.pending ? 'disabled' : ''}>${icon('edit')} Edit</button>
+          <button class="btn danger-ghost sm icon-only" data-action="remove-doctor" data-id="${d.id}" aria-label="Remove ${d.name}" ${d.pending ? 'disabled' : ''}>${icon('trash')}</button>
+        </div>
+      </div>
+    </div>`;
+}
+
+function timeOffChips() {
+  const list = state.timeOff || [];
+  if (!list.length) return html`<span class="muted" style="font-size:13px">No days off added.</span>`;
+  return list.map((d) => html`<span class="tag">${fmtDate(d)}<button type="button" class="tag-x" data-action="to-remove" data-d="${d}" aria-label="Remove ${d}">×</button></span>`);
+}
+
+function doctorFormModal(values = {}, error = '') {
+  const v = (k, fallback = '') => values[k] ?? fallback;
+  const days = typeof values.days_open === 'string' ? values.days_open.split(',').map(Number)
+    : Array.isArray(values.days_open) ? values.days_open.map(Number) : [1, 2, 3, 4, 5, 6];
+  const editing = values.id != null && !String(values.id).startsWith('tmp');
+  return html`
+    <div class="modal-top"><h3>${editing ? `Edit ${v('name')}` : 'Add a doctor'}</h3>${closeBtn()}</div>
+    <p class="lead">Patients see these details and book within these timings.</p>
+    <form data-form="doctor">
+      ${error ? html`<div class="form-error">${error}</div>` : ''}
+      ${editing ? html`<input type="hidden" name="id" value="${values.id}">` : ''}
+      <div class="row">
+        <label><span>Full name</span><input name="name" required maxlength="80" value="${v('name')}" placeholder="Dr. Priya Sharma"></label>
+        <label><span>Specialty</span><input name="specialty" required maxlength="80" value="${v('specialty')}" placeholder="Cardiology"></label>
+      </div>
+      <div class="row">
+        <label><span>Qualification</span><input name="qualification" maxlength="120" value="${v('qualification')}" placeholder="MBBS, MD"></label>
+        <label><span>Experience (years)</span><input name="experience_years" type="number" min="0" max="70" value="${v('experience_years')}"></label>
+      </div>
+      <div class="row">
+        <label><span>Consultation fee (₹)</span><input name="consultation_fee" type="number" min="0" value="${v('consultation_fee')}"></label>
+        <label><span>Phone</span><input name="phone" type="tel" maxlength="30" value="${v('phone')}"></label>
+      </div>
+      <label><span>Email</span><input name="email" type="email" maxlength="120" value="${v('email')}"></label>
+      <label><span>About (shown to patients)</span><textarea name="bio" maxlength="500" placeholder="e.g. Heart health, ECG review and chest pain consultations.">${v('bio')}</textarea></label>
+      <h4 class="form-section">Timings</h4>
+      <div class="row">
+        <label><span>Starts at</span><input name="open_time" type="time" required value="${v('open_time', '09:00')}"></label>
+        <label><span>Ends at</span><input name="close_time" type="time" required value="${v('close_time', '17:00')}"></label>
+      </div>
+      <label><span>Appointment length</span>
+        <select name="slot_minutes">${[10, 15, 20, 30, 45, 60].map((n) =>
+          html`<option value="${n}" ${n === Number(v('slot_minutes', 30)) ? 'selected' : ''}>${n} minutes</option>`)}</select></label>
+      <label><span>Working days</span></label>
+      <div class="days">${WEEK.map((d) => html`
+        <label class="day-check"><input type="checkbox" name="days_open" value="${d}" ${days.includes(d) ? 'checked' : ''}> ${DOW[d]}</label>`)}
+      </div>
+      <h4 class="form-section">Availability</h4>
+      <label class="day-check" style="display:inline-flex;margin-bottom:14px"><input type="checkbox" name="available" ${values.available === false ? '' : 'checked'}> Taking new appointments</label>
+      <label><span>Days off (leave, holidays)</span></label>
+      <div class="to-add">
+        <input type="date" id="to-date" min="${today()}">
+        <button type="button" class="btn ghost sm" data-action="to-add">${icon('plus')} Add day off</button>
+      </div>
+      <div class="tags" id="to-chips" style="margin:10px 0 18px">${timeOffChips()}</div>
+      <div class="modal-actions">
+        <button type="button" class="btn ghost" data-action="close-modal">Cancel</button>
+        <button class="btn grad">${icon('check')} ${editing ? 'Save changes' : 'Add doctor'}</button>
+      </div>
+    </form>`;
+}
+
 function patientsTable(list, q, emptyText = 'No patients yet.', clickable = false) {
   if (!list) return html`<div style="padding:16px">${skeleton(4, 44)}</div>`;
   const term = q.trim().toLowerCase();
@@ -984,11 +1160,12 @@ function patientsTable(list, q, emptyText = 'No patients yet.', clickable = fals
   if (!rows.length) return emptyBox(term ? 'No patients match your search.' : emptyText, 'users', false);
   return html`
     <div class="table-wrap"><table class="rtable">
-      <thead><tr><th>Patient</th><th>Phone</th><th class="num">Visits</th><th class="num">Upcoming</th><th>Last appointment</th></tr></thead>
+      <thead><tr><th>Patient</th><th>Phone</th><th>Doctors seen</th><th class="num">Visits</th><th class="num">Upcoming</th><th>Last appointment</th></tr></thead>
       <tbody>${rows.map((p) => html`
         <tr class="${clickable ? 'clickable' : ''}" ${clickable ? raw(`data-action="patient-drawer" data-id="${p.id}"`) : ''}>
           ${td('Patient', html`<div class="person">${avatar(p.name, 'round')}<div><b>${p.name}</b><small class="muted">${p.email}</small></div></div>`, 'primary')}
           ${td('Phone', p.phone || '—', 'nowrap')}
+          ${td('Doctors seen', p.doctors ? html`<div class="tags">${tags(p.doctors).map((n) => html`<span class="tag">${n}</span>`)}</div>` : '—')}
           ${td('Visits', p.visits, 'num')}
           ${td('Upcoming', p.upcoming || 0, 'num')}
           ${td('Last appointment', p.last_date ? fmtDate(p.last_date) : '—', 'nowrap')}
@@ -1011,8 +1188,7 @@ function hospitalPatientsView() {
 }
 
 function slotHint(open, close, len, days) {
-  const n = slotsPerDay(open, close, len);
-  return html`${icon('activity')} ${n} appointment slot${n === 1 ? '' : 's'} per day · ${n * days} per week`;
+  return html`${icon('clock')} Open ${days} day${days === 1 ? '' : 's'} a week, ${fmtTime(open)} – ${fmtTime(close)}. New doctors start with these hours and ${len}-minute appointments.`;
 }
 
 function settingsView() {
@@ -1021,7 +1197,7 @@ function settingsView() {
   const days = openDays(h);
   return html`
     <div class="page-head anim">
-      <div><h1>Settings</h1><p>Working hours decide which slots patients can book.</p></div>
+      <div><h1>Settings</h1><p>Your hospital's details and general opening hours. Each doctor's own timings are set under <a href="#/doctors">Doctors</a>.</p></div>
     </div>
     <form class="card anim" data-form="settings" data-keep data-input="slot-hint" style="max-width:680px">
       <div class="hint" id="slot-hint">${slotHint(h.open_time, h.close_time, h.slot_minutes, days.length)}</div>
@@ -1029,7 +1205,7 @@ function settingsView() {
         <label><span>Opening time</span><input id="s-open" type="time" name="open_time" value="${h.open_time}" required></label>
         <label><span>Closing time</span><input id="s-close" type="time" name="close_time" value="${h.close_time}" required></label>
       </div>
-      <label><span>Appointment length</span>
+      <label><span>Default appointment length (for new doctors)</span>
         <select id="s-slot" name="slot_minutes">${[10, 15, 20, 30, 45, 60].map((n) =>
           html`<option value="${n}" ${n === h.slot_minutes ? 'selected' : ''}>${n} minutes</option>`)}</select></label>
       <label><span>Working days</span></label>
@@ -1063,6 +1239,7 @@ function overviewView() {
   return html`${head}
     <div class="stats stagger">
       ${stat('Hospitals', T.hospitals, 'hospital')}
+      ${stat('Doctors', T.doctors ?? 0, 'stethoscope', 'ok')}
       ${stat('Patients', T.patients, 'users', 'indigo')}
       ${stat('Appointments', T.appointments, 'clipboard')}
       ${stat('Today', T.today, 'zap', 'warn')}
@@ -1129,12 +1306,13 @@ function adminHospitalsTable(list) {
   if (!rows.length) return emptyBox(term ? 'No hospitals match your search.' : 'No hospitals yet.', 'hospital', false);
   return html`
     <div class="table-wrap"><table class="rtable">
-      <thead><tr><th>Hospital</th><th>Login</th><th>Hours</th><th class="num">Patients</th><th class="num">Appointments</th><th class="num">Upcoming</th><th></th></tr></thead>
+      <thead><tr><th>Hospital</th><th>Login</th><th>Hours</th><th class="num">Doctors</th><th class="num">Patients</th><th class="num">Appointments</th><th class="num">Upcoming</th><th></th></tr></thead>
       <tbody>${rows.map((h) => html`
         <tr class="${h.pending ? 'is-pending' : 'clickable'}" ${h.pending ? '' : raw(`data-action="nav" data-href="/admin/hospital/${h.id}"`)}>
           ${td('Hospital', html`<div class="person">${avatar(h.name)}<div><b>${h.name}</b><small class="muted">${h.city}</small></div></div>`, 'primary')}
           ${td('Login', h.login_email)}
           ${td('Hours', html`${daysLabel(h)}<small class="muted" style="display:block">${hoursLabel(h)}</small>`, 'nowrap')}
+          ${td('Doctors', h.doctors ?? 0, 'num')}
           ${td('Patients', h.patients, 'num')}
           ${td('Appointments', h.appointments, 'num')}
           ${td('Upcoming', h.upcoming, 'num')}
@@ -1174,7 +1352,7 @@ function adminHospitalView(hid) {
   const data = get(`/admin/hospitals/${hid}`);
   const back = html`<a class="back" href="#/admin/hospitals">${icon('arrow-left')} All hospitals</a>`;
   if (!data) return html`${back}${skeleton(3, 120)}`;
-  const { hospital: h, patients, appointments } = data;
+  const { hospital: h, patients, appointments, doctors = [] } = data;
   const upcoming = appointments.filter((a) => a.status === 'booked' && a.date >= today()).length;
   return html`${back}
     <div class="hosp-head anim">
@@ -1189,19 +1367,32 @@ function adminHospitalView(hid) {
       <span class="info-pill">${icon('mail')}${h.login_email}</span>
     </div>
     <div class="stats stagger">
+      ${stat('Doctors', doctors.length, 'stethoscope', 'ok')}
       ${stat('Patients', patients.length, 'users', 'indigo')}
       ${stat('Appointments', appointments.length, 'clipboard')}
       ${stat('Upcoming', upcoming, 'clock', 'warn')}
       ${stat('Completed', appointments.filter((a) => a.status === 'completed').length, 'check-circle', 'ok')}
+    </div>
+    <h3 class="section-title">Doctors <span class="count-pill">${doctors.length}</span></h3>
+    <div class="card flush anim">${doctors.length ? html`
+      <div class="table-wrap"><table class="rtable">
+        <thead><tr><th>Doctor</th><th>Timings</th><th class="num">Fee</th><th class="num">Upcoming</th><th class="num">Total</th><th>Status</th></tr></thead>
+        <tbody>${doctors.map((d) => html`<tr>
+          ${td('Doctor', html`<div class="person">${avatar(d.name, 'round')}<div><b>${d.name}</b><small class="muted">${d.specialty}${d.qualification ? ` · ${d.qualification}` : ''}</small></div></div>`, 'primary')}
+          ${td('Timings', html`${daysLabel(d)}<small class="muted" style="display:block">${hoursLabel(d)} · ${d.slot_minutes} min</small>`, 'nowrap')}
+          ${td('Fee', feeLabel(d) || '—', 'num')}${td('Upcoming', d.upcoming, 'num')}${td('Total', d.total, 'num')}
+          ${td('Status', html`<span class="badge ${d.available ? 'booked' : 'cancelled'}">${d.available ? 'Available' : 'Unavailable'}</span>`)}</tr>`)}</tbody>
+      </table></div>` : emptyBox('This hospital hasn\'t added any doctors yet.', 'stethoscope', false)}
     </div>
     <h3 class="section-title">Patients <span class="count-pill">${patients.length}</span></h3>
     <div class="card flush anim">${patientsTable(patients, '', 'No patients have booked here yet.', true)}</div>
     <h3 class="section-title">Recent appointments</h3>
     <div class="card flush anim">${appointments.length ? html`
       <div class="table-wrap"><table class="rtable">
-        <thead><tr><th>Patient</th><th>Date</th><th>Time</th><th>Reason</th><th>Status</th></tr></thead>
+        <thead><tr><th>Patient</th><th>Doctor</th><th>Date</th><th>Time</th><th>Reason</th><th>Status</th></tr></thead>
         <tbody>${appointments.map((a) => html`<tr>
           ${td('Patient', html`<div class="person">${avatar(a.patient_name, 'sm')}<b>${a.patient_name}</b></div>`, 'primary')}
+          ${td('Doctor', a.doctor_name || '—', 'nowrap')}
           ${td('Date', fmtDate(a.date), 'nowrap')}${td('Time', fmtTime(a.time), 'nowrap')}
           ${td('Reason', a.reason || '—')}${td('Status', badge(a.status))}</tr>`)}</tbody>
       </table></div>` : emptyBox('No appointments yet.', 'calendar', false)}
@@ -1307,7 +1498,7 @@ function patientDrawer(pid) {
         return html`<div class="appt">
           <div class="appt-main">
             <div class="date-tile ${a.status === 'booked' && a.date >= today() ? '' : 'dim'}"><small>${monShort(a.date)}</small><b>${dt.getDate()}</b><small>${DOW[dt.getDay()]}</small></div>
-            <div><b>${a.hospital_name}</b><span class="meta">${icon('clock')}${fmtTime(a.time)}${a.reason ? ` · ${a.reason}` : ''}</span></div>
+            <div><b>${a.hospital_name}</b>${a.doctor_name ? html`<span class="meta">${icon('stethoscope')}${a.doctor_name}${a.doctor_specialty ? ` · ${a.doctor_specialty}` : ''}</span>` : ''}<span class="meta">${icon('clock')}${fmtTime(a.time)}${a.reason ? ` · ${a.reason}` : ''}</span></div>
           </div>
           ${badge(a.status)}
         </div>`;
@@ -1358,7 +1549,7 @@ const actions = {
     scheduleRender();
   },
 
-  'pick-date': ({ hid, date }) => replaceRoute(`/hospital/${hid}?date=${date}`),
+  'pick-date': ({ hid, did, date }) => replaceRoute(`/hospital/${hid}?doctor=${did}&date=${date}`),
   'pick-slot': (d) => openModal(bookingModal(d), { focus: 'textarea' }),
 
   ics({ id }) {
@@ -1369,8 +1560,9 @@ const actions = {
   reschedule({ id }) {
     const a = peek('/appointments')?.find((x) => String(x.id) === id);
     if (!a) return;
-    const h = peek(`/hospitals/${a.hospital_id}`) || peek('/hospitals')?.find((x) => x.id === a.hospital_id);
-    state.resched = { id: a.id, hid: a.hospital_id, date: h && !isOpenOn(h, a.date) ? firstOpenDate(h) : a.date, time: null };
+    const doc = peek(`/doctors/${a.doctor_id}`) || peek(doctorsKey(a.hospital_id))?.find((x) => x.id === a.doctor_id);
+    const date = doc && !docWorksOn(doc, a.date) ? firstWorkingDate(doc) : a.date;
+    state.resched = { id: a.id, hid: a.hospital_id, did: a.doctor_id, date, time: null };
     state.seen['slots:rs-slot'] = null;
     openDynamicModal(rescheduleView, { cls: 'wide', focus: '.date-chip.active' });
   },
@@ -1382,8 +1574,8 @@ const actions = {
     if (!a || !rs.time) return;
     const { date, time } = rs;
     closeModal();
-    const oldKey = slotsKey(a.hospital_id, a.date);
-    const newKey = slotsKey(a.hospital_id, date);
+    const oldKey = doctorSlotsKey(a.doctor_id, a.date);
+    const newKey = doctorSlotsKey(a.doctor_id, date);
     optimistic({
       keys: ['/appointments', oldKey, newKey],
       apply() {
@@ -1403,11 +1595,11 @@ const actions = {
     if (!a) return;
     confirmBox({
       title: 'Cancel appointment?',
-      text: `${a.hospital_name} · ${fmtDate(a.date, true)} at ${fmtTime(a.time)}`,
+      text: `${withDoctor(a)} at ${a.hospital_name} · ${fmtDate(a.date, true)} at ${fmtTime(a.time)}`,
       ok: 'Yes, cancel it',
       danger: true,
       onOk() {
-        const sKey = slotsKey(a.hospital_id, a.date);
+        const sKey = doctorSlotsKey(a.doctor_id, a.date);
         optimistic({
           keys: ['/appointments', sKey],
           apply() {
@@ -1422,8 +1614,66 @@ const actions = {
     });
   },
 
-  'cal-day': ({ month, day }) => replaceRoute(`/calendar?month=${month}&day=${day}`),
-  'cal-nav': ({ month, day }) => replaceRoute(`/calendar?month=${month}${day ? `&day=${day}` : ''}`),
+  'cal-day': ({ month, day, doctor }) => replaceRoute(`/calendar?month=${month}&day=${day}${doctor ? `&doctor=${doctor}` : ''}`),
+  'cal-nav': ({ month, day, doctor }) => replaceRoute(`/calendar?month=${month}${day ? `&day=${day}` : ''}${doctor ? `&doctor=${doctor}` : ''}`),
+  'cal-doctor': ({ month, day, doctor }) => replaceRoute(`/calendar?month=${month}&day=${day}${doctor ? `&doctor=${doctor}` : ''}`),
+
+  'add-doctor'() {
+    const h = peek('/hospital/settings') || state.hospital || {};
+    state.timeOff = [];
+    openModal(doctorFormModal({ open_time: h.open_time, close_time: h.close_time, slot_minutes: h.slot_minutes, days_open: h.days_open }), { cls: 'wide' });
+  },
+  'edit-doctor'({ id }) {
+    const d = peek('/hospital/doctors')?.find((x) => String(x.id) === id);
+    if (!d) return;
+    state.timeOff = [...(d.time_off || [])];
+    openModal(doctorFormModal(d), { cls: 'wide' });
+  },
+  'to-add'() {
+    const input = document.getElementById('to-date');
+    const d = input?.value;
+    if (!d) return toast('Pick a date first', 'error');
+    if (d < today()) return toast('Pick today or a later date', 'error');
+    if (!state.timeOff.includes(d)) state.timeOff = [...state.timeOff, d].sort();
+    input.value = '';
+    swap('to-chips', html`${timeOffChips()}`);
+  },
+  'to-remove'({ d }) {
+    state.timeOff = state.timeOff.filter((x) => x !== d);
+    swap('to-chips', html`${timeOffChips()}`);
+  },
+  'toggle-available'({ id }) {
+    const d = peek('/hospital/doctors')?.find((x) => String(x.id) === id);
+    if (!d) return;
+    const available = !d.available;
+    optimistic({
+      keys: ['/hospital/doctors'],
+      apply: () => mutate('/hospital/doctors', (list) => list.map((x) => (x.id === d.id ? { ...x, available } : x))),
+      request: () => api('PUT', `/hospital/doctors/${d.id}`, { available }),
+      commit: (saved) => mutate('/hospital/doctors', (list) => list.map((x) => (x.id === d.id ? saved : x))),
+    });
+    toast(available ? `${d.name} is taking appointments again` : `${d.name} marked unavailable. Existing bookings stay as they are.`, 'success');
+  },
+  'remove-doctor'({ id }) {
+    const d = peek('/hospital/doctors')?.find((x) => String(x.id) === id);
+    if (!d) return;
+    confirmBox({
+      title: `Remove ${d.name}?`,
+      text: d.upcoming ? `${d.name} still has ${d.upcoming} upcoming appointment${d.upcoming === 1 ? '' : 's'}, so they can't be removed yet. Cancel those first, or mark them unavailable instead.`
+        : 'Patients will no longer see this doctor. Past appointment history is kept.',
+      ok: d.upcoming ? 'Mark unavailable instead' : 'Remove doctor',
+      danger: !d.upcoming,
+      onOk() {
+        if (d.upcoming) return d.available ? actions['toggle-available']({ id }) : null;
+        optimistic({
+          keys: ['/hospital/doctors'],
+          apply: () => mutate('/hospital/doctors', (list) => list.filter((x) => x.id !== d.id)),
+          request: () => api('DELETE', `/hospital/doctors/${d.id}`),
+        });
+        toast(`${d.name} removed`, 'success');
+      },
+    });
+  },
 
   'hosp-status'({ id, status, key }) {
     const a = peek(key)?.find((x) => String(x.id) === id);
@@ -1447,10 +1697,10 @@ const actions = {
     });
   },
 
-  'export-month'({ key, month }) {
-    const rows = (peek(key) || []).slice().sort(byWhen);
-    downloadCsv(`appointments-${month}.csv`, rows, [
-      ['Date', (a) => a.date], ['Time', (a) => a.time], ['Patient', (a) => a.patient_name], ['Phone', (a) => a.patient_phone],
+  'export-month'({ key, month, doctor }) {
+    const rows = (peek(key) || []).filter((a) => !doctor || String(a.doctor_id) === doctor).sort(byWhen);
+    downloadCsv(`appointments-${month}${doctor ? `-doctor-${doctor}` : ''}.csv`, rows, [
+      ['Date', (a) => a.date], ['Time', (a) => a.time], ['Doctor', (a) => a.doctor_name], ['Patient', (a) => a.patient_name], ['Phone', (a) => a.patient_phone],
       ['Email', (a) => a.patient_email], ['Reason', (a) => a.reason], ['Status', (a) => a.status]]);
   },
   'export-hospital-patients'() {
@@ -1538,9 +1788,11 @@ const forms = {
   book(data) {
     closeModal();
     const hid = Number(data.hospitalId);
+    const did = Number(data.doctorId);
     const { date, time, reason } = data;
     const h = peek(`/hospitals/${hid}`);
-    const sKey = slotsKey(hid, date);
+    const doc = peek(doctorsKey(hid))?.find((x) => x.id === did);
+    const sKey = doctorSlotsKey(did, date);
     const tempId = `tmp-${Date.now()}`;
     state.justBooked = `${sKey}|${time}`;
     setTimeout(() => { state.justBooked = null; }, 700);
@@ -1549,14 +1801,15 @@ const forms = {
       apply() {
         mutate(sKey, (d) => ({ ...d, slots: d.slots.map((s) => (s.time === time ? { ...s, status: 'mine' } : s)) }));
         mutate('/appointments', (list) => [{
-          id: tempId, hospital_id: hid, date, time, reason, status: 'booked', pending: true, slot_minutes: h?.slot_minutes,
+          id: tempId, hospital_id: hid, doctor_id: did, date, time, reason, status: 'booked', pending: true,
+          slot_minutes: doc?.slot_minutes, doctor_name: doc?.name, doctor_specialty: doc?.specialty,
           hospital_name: h?.name ?? 'Hospital', hospital_city: h?.city, hospital_address: h?.address,
         }, ...list]);
       },
-      request: () => api('POST', '/appointments', { hospitalId: hid, date, time, reason }),
+      request: () => api('POST', '/appointments', { doctorId: did, hospitalId: hid, date, time, reason }),
       commit: (created) => mutate('/appointments', (list) => list.map((a) => (a.id === tempId ? created : a))),
     });
-    toast(`Booked · ${fmtDate(date)} at ${fmtTime(time)}`, 'success', { label: 'View', run: () => go('/my') });
+    toast(`Booked with ${doc?.name ?? 'the doctor'} · ${fmtDate(date)} at ${fmtTime(time)}`, 'success', { label: 'View', run: () => go('/my') });
     refreshSoon(['/notifications']);
   },
 
@@ -1587,6 +1840,47 @@ const forms = {
       onError: () => { state.hospital = prevHospital; },
     });
     toast('Settings saved', 'success');
+  },
+
+  doctor(data, form, fd) {
+    const payload = {
+      name: data.name.trim(), specialty: data.specialty.trim(), qualification: data.qualification.trim(),
+      experience_years: data.experience_years === '' ? null : Number(data.experience_years),
+      consultation_fee: data.consultation_fee === '' ? null : Number(data.consultation_fee),
+      phone: data.phone.trim(), email: data.email.trim(), bio: data.bio.trim(),
+      open_time: data.open_time, close_time: data.close_time, slot_minutes: Number(data.slot_minutes),
+      days_open: fd.getAll('days_open').map(Number), time_off: [...(state.timeOff || [])], available: fd.get('available') === 'on',
+    };
+    const values = { ...payload, id: data.id, days_open: payload.days_open.join(',') };
+    const reopen = (msg) => openModal(doctorFormModal(values, msg), { cls: 'wide' });
+    if (!payload.name || !payload.specialty) return reopen('Name and specialty are required.');
+    if (!payload.open_time || !payload.close_time || payload.open_time >= payload.close_time) return reopen('End time must be after the start time.');
+    if (!payload.days_open.length) return reopen('Choose at least one working day.');
+    closeModal();
+    const editing = Boolean(data.id);
+    const row = { ...payload, days_open: payload.days_open.join(',') };
+    if (editing) {
+      const did = Number(data.id);
+      optimistic({
+        keys: ['/hospital/doctors'],
+        apply: () => mutate('/hospital/doctors', (list) => list.map((x) => (x.id === did ? { ...x, ...row } : x))),
+        request: () => api('PUT', `/hospital/doctors/${did}`, payload),
+        commit: (saved) => mutate('/hospital/doctors', (list) => list.map((x) => (x.id === did ? saved : x))),
+        onError: (err) => { state.timeOff = payload.time_off; reopen(err.message); },
+      });
+      toast(`${payload.name} updated`, 'success');
+    } else {
+      const tempId = `tmp-${Date.now()}`;
+      optimistic({
+        keys: ['/hospital/doctors'],
+        apply: () => mutate('/hospital/doctors', (list) => [...list, { ...row, id: tempId, pending: true, today: 0, upcoming: 0 }]
+          .sort((a, b) => a.name.localeCompare(b.name))),
+        request: () => api('POST', '/hospital/doctors', payload),
+        commit: (created) => mutate('/hospital/doctors', (list) => list.map((x) => (x.id === tempId ? created : x))),
+        onError: (err) => { state.timeOff = payload.time_off; reopen(err.message); },
+      });
+      toast(`${payload.name} added`, 'success');
+    }
   },
 
   'add-hospital'(data) {

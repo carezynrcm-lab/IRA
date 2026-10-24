@@ -1,7 +1,7 @@
 [project]
-name = "era-mcp"
+name = "ira-mcp"
 version = "0.1.0"
-description = "MCP server for ERA: lets Claude act as a patient or a hospital"
+description = "MCP server for IRA: lets Claude act as a patient or a hospital"
 authors = [
     { name = "Khushal Jain", email = "carezyn.rcm@gmail.com" }
 ]
@@ -13,7 +13,7 @@ dependencies = [
 ]
 
 [project.scripts]
-era-mcp = "era_mcp:main"
+ira-mcp = "ira_mcp:main"
 
 [build-system]
 requires = ["uv_build>=0.12.5,<0.13.0"]

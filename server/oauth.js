@@ -2,7 +2,7 @@
 //
 // Claude registers itself (dynamic client registration), sends the user to /oauth/authorize,
 // the user logs in as a patient or a hospital, and Claude exchanges the code (with PKCE) for
-// an access token. The access token is an ordinary ERA session token, so the MCP server
+// an access token. The access token is an ordinary IRA session token, so the MCP server
 // can verify it with GET /api/me and see exactly who the caller is.
 import crypto from 'node:crypto';
 import { hashToken, newToken } from './auth.js';
@@ -12,7 +12,7 @@ import { esc, HttpError, readParams, redirect, sendHtml, sendJson } from './http
 
 const CODE_TTL_MS = 10 * 60_000;
 const REFRESH_TTL_MS = 90 * 24 * 3600_000;
-const SCOPE = 'era';
+const SCOPE = 'ira';
 const CORS = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
@@ -228,9 +228,9 @@ function loginPage(req, client, p, error = '') {
   const hidden = HIDDEN.filter((k) => p[k] != null).map((k) => `<input type="hidden" name="${k}" value="${esc(p[k])}">`).join('');
   const appName = esc(client.client_name || 'An app');
   return page({
-    title: 'Log in to ERA',
+    title: 'Log in to IRA',
     body: `
-      <p class="lead"><b>${appName}</b> wants to use your ERA account. Choose who you are and log in. You'll only get tools for that kind of account.</p>
+      <p class="lead"><b>${appName}</b> wants to use your IRA account. Choose who you are and log in. You'll only get tools for that kind of account.</p>
       ${error ? `<p class="err">${esc(error)}</p>` : ''}
       <form method="post" action="/oauth/authorize">
         ${hidden}
@@ -270,6 +270,6 @@ input:focus{outline:none;border-color:var(--primary);box-shadow:0 0 0 4px var(--
 .btn.ghost{background:none;color:var(--muted);border:1px solid var(--border);margin-top:8px}
 .err{background:var(--dsoft);color:var(--danger);padding:10px 12px;border-radius:10px;font-size:14px}
 @media (max-width:420px){.roles{grid-template-columns:1fr}}
-</style></head><body><main class="card"><div class="brand"><span class="logo">+</span>ERA</div><h1>${esc(title)}</h1>${body}</main></body></html>`;
+</style></head><body><main class="card"><div class="brand"><span class="logo">+</span>IRA</div><h1>${esc(title)}</h1>${body}</main></body></html>`;
 }
 

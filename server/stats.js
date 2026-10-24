@@ -9,6 +9,7 @@ export async function computeStats(sql) {
     sql`
       select
         (select count(*) from hospitals) as hospitals,
+        (select count(*) from doctors where not archived) as doctors,
         (select count(*) from users where role = 'patient') as patients,
         (select count(*) from appointments) as appointments,
         (select count(*) from appointments where status = 'booked' and date >= ${today}) as upcoming,
